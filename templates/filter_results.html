@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+
+{% block title %}Scan Results{% endblock %}
+
+{% block content %}
+<style>
+.result-flash {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+    border-radius: 16px;
+    padding: 14px 18px;
+    font-weight: 800;
+    margin-bottom: 18px;
+}
+
+.result-flash.error {
+    background: #fee2e2;
+    color: #991b1b;
+    border-color: #fecaca;
+}
+</style>
+
+<div class="results-page-v2">
+<div id="reviewMessageBox"></div>
+
+{% with messages = get_flashed_messages() %}
+    {% if messages %}
+        {% for message in messages %}
+            <div class="result-flash">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+{% endwith %}
+
+    <section class="results-header-card">
+        <span class="results-badge">Scan complete</span>
+
+        <h1>Filtered photo results</h1>
+
+        <p>
+            Family Focus scanned your photos and separated confirmed matches from possible matches.
+        </p>
+
+        <div class="results-summary">
+            <div>
+                <strong>{{ kept|length }}</strong>
+                <span>Confirmed</span>
+            </div>
+
+            <div>
+                <strong>{{ possible|length }}</strong>
+                <span>Possible</span>
+            </div>
+
+            <div>
+                <strong>{{ skipped }}</strong>
+                <span>Skipped</span>
+            </div>
+        </div>
+
+        <div class="results-actions">
+            <a href="{{ url_for('filter_photos_page') }}" class="results-btn-main">
+                Scan More Photos
+            </a>
+
+            <a href="{{ url_for('home') }}" class="results-btn-light">
+                Family Profiles
+            </a>
+        </div>
+    </section>
+
+
+    {% if kept %}
+
+    <section class="results-gallery-card">
+
+        <div class="results-gallery-header">
+            <div>
+                <h2>Confirmed family photos</h2>
+                <p>These photos matched known family profiles.</p>
+            </div>
+
+            <span>{{ kept|length }} photos</span>
+        </div>
+
+        <div class="results-grid">
+
+            {% for photo in kept %}
+            <div class="result-photo-card confirmed">
+                <img src="{{ photo.path }}" alt="Confirmed family photo">
+
+                <div class="result-card-body">
+                    <strong>Confirmed match</strong>
+
+                    {% if photo.matches %}
+                        <ul>
+                            {% for match in photo.matches %}
+                            <li>
+                                {{ match.name }}
+                                {% if match.distance %}
+                                    <small>{{ "%.3f"|format(match.distance) }}</small>
+                                {% endif %}
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p>Unknown</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+
+        </div>
+
+    </section>
+
+    {% endif %}
+
+
+    {% if possible %}
+
+    <section class="results-gallery-card possible-section">
+
+        <div class="results-gallery-header">
+            <div>
+                <h2>Possible matches</h2>
+                <p>Review these photos and teach the system if the match is correct.</p>
+            </div>
+
+            <span>{{ possible|length }} photos</span>
+        </div>
+
+        <div class="results-grid">
+
+            {% for photo in possible %}
+            <div class="result-photo-card possible">
+                <img src="{{ photo.path }}" alt="Possible family photo">
+
+                <div class="result-card-body">
+                    <strong>Possible match</strong>
+
+                    {% if photo.matches %}
+                        <ul>
+                            {% for match in photo.matches %}
+                            <li>
+                                {{ match.name }}
+                                {% if match.distance %}
+                                    <small>{{ "%.3f"|format(match.distance) }}</small>
+                                {% endif %}
+
+                                    <div class="review-actions">
+                                        <a
+                                            href="{{ url_for(
+                                                'review_possible_photo',
+                                                filename=photo.filename,
+                                                action='yes',
+                                                member_name=match.name,
+                                                face_crop=match.face_crop
+                                            ) }}"
+                                            class="review-yes js-review-btn"
+                                        >
+                                            Yes
+                                        </a>
+
+                                        <a
+                                            href="{{ url_for(
+                                                'review_possible_photo',
+                                                filename=photo.filename,
+                                                action='no',
+                                                member_name=match.name,
+                                                face_crop=match.face_crop
+                                            ) }}"
+                                            class="review-no js-review-btn"
+                                        >
+                                            No
+                                        </a>
+                                    </div>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p>Unknown</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+
+        </div>
+
+    </section>
+
+    {% endif %}
+
+
+    {% if not kept and not possible %}
+
+    <section class="results-gallery-card">
+        <div class="empty-results">
+            <div>🔍</div>
+            <h3>No known family members found</h3>
+            <p>
+                Try uploading clearer photos or adding more face profile images.
+            </p>
+
+            <a href="{{ url_for('filter_photos_page') }}" class="results-btn-main">
+                Scan Again
+            </a>
+        </div>
+    </section>
+
+    {% endif %}
+
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll(".js-review-btn").forEach(function (btn) {
+        btn.addEventListener("click", function (event) {
+            event.preventDefault();
+
+            const card = btn.closest(".result-photo-card");
+            const url = btn.href;
+
+            fetch(url, {
+                method: "GET",
+                headers: {
+                    "X-Requested-With": "XMLHttpRequest"
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                const box = document.getElementById("reviewMessageBox");
+
+                box.innerHTML = `
+                    <div class="result-flash">
+                        ${data.message}
+                    </div>
+                `;
+
+                if (data.ok && card) {
+                    card.remove();
+                }
+            })
+            .catch(() => {
+                const box = document.getElementById("reviewMessageBox");
+
+                box.innerHTML = `
+                    <div class="result-flash error">
+                        Something went wrong.
+                    </div>
+                `;
+            });
+        });
+    });
+});
+</script>
+{% endblock %}

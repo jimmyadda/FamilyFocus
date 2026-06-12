@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Camera Recognition{% endblock %}
+
+{% block content %}
+
+<div class="camera-page-v2">
+
+    <section class="camera-hero-card">
+
+        <div class="camera-copy">
+            <span class="camera-badge">Live test</span>
+
+            <h1>Live family recognition</h1>
+
+            <p>
+                Test your trained family profiles using your webcam.
+                Known family members will be marked in blue.
+            </p>
+
+            <div class="camera-legend">
+                <span><b class="blue-dot"></b> Known family member</span>
+                <span><b class="green-dot"></b> Unknown face</span>
+            </div>
+
+            <div class="camera-controls-v2">
+                <button id="startCameraBtn" type="button">Start Camera</button>
+                <button id="startRecognitionBtn" type="button">Start Recognition</button>
+                <button id="stopBtn" type="button">Stop</button>
+            </div>
+        </div>
+
+        <div class="camera-preview-card">
+            <video id="video" autoplay muted playsinline></video>
+            <canvas id="canvas"></canvas>
+            <p id="statusText">Camera is off.</p>
+        </div>
+
+    </section>
+
+</div>
+
+<script src="{{ url_for('static', filename='js/camera.js') }}"></script>
+
+{% endblock %}

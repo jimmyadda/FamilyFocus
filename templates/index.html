@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}
+Family Focus
+{% endblock %}
+
+{% block content %}
+
+<div class="home-page">
+
+    <section class="home-hero">
+
+        <div class="hero-left">
+            <div class="hero-badge">Family photo detection</div>
+
+            <h1>Upload photos.<br>Find your family.</h1>
+
+            <p>
+                Upload many photos at once and let Family Focus detect your known family members.
+                Perfect for school events, birthdays, trips and crowded photos.
+            </p>
+
+            <div class="hero-buttons">
+                <a href="{{ url_for('filter_photos_page') }}" class="btn-main">
+                    Upload & Scan Photos
+                </a>
+
+                <a href="{{ url_for('camera') }}" class="btn-light">
+                    Test Camera
+                </a>
+            </div>
+        </div>
+
+        <div class="hero-upload-card">
+            <div class="upload-emoji">📸</div>
+
+            <h2>Bulk Upload</h2>
+
+            <p>
+                Select multiple photos and scan them for family faces.
+            </p>
+
+            <a href="{{ url_for('filter_photos_page') }}" class="upload-box">
+                <span class="upload-plus">+</span>
+                <strong>Start Upload</strong>
+                <small>JPG, JPEG, PNG</small>
+            </a>
+        </div>
+
+    </section>
+
+
+    <section class="home-stats">
+
+        <div class="stat-box">
+            <strong>{{ members|length }}</strong>
+            <span>Family profiles</span>
+        </div>
+
+        <div class="stat-box">
+            <strong>Bulk</strong>
+            <span>Photo upload</span>
+        </div>
+
+        <div class="stat-box">
+            <strong>Smart</strong>
+            <span>Face detection</span>
+        </div>
+
+    </section>
+
+
+    <section class="profiles-section">
+
+        <div class="profiles-header">
+            <div>
+                <h2>Family profiles</h2>
+                <p>
+                    Add family members and upload clear photos to improve detection.
+                </p>
+            </div>
+        </div>
+
+        <form class="home-add-member" method="POST" action="{{ url_for('create_member') }}">
+            <input type="text" name="name" placeholder="Example: Emma" required>
+            <button type="submit">Add Member</button>
+        </form>
+
+        <div class="home-members-grid">
+
+            {% for member in members %}
+
+                <a href="{{ url_for('member_page', member_id=member.id) }}" class="home-member-card">
+
+            <div class="member-avatar">
+                {% if member.profile_photo %}
+
+                    {% set filename = member.profile_photo.replace('\\', '/').split('/')[-1] %}
+
+                    <img
+                        src="{{ url_for(
+                            'serve_profile_file',
+                            member_id=member.id,
+                            filename=filename
+                        ) }}"
+                        alt="{{ member.name }}"
+                    >
+
+                {% else %}
+                    {{ member.name[0]|upper }}
+                {% endif %}
+            </div>
+
+                    <div class="member-info">
+                        <h3>{{ member.name }}</h3>
+                        <p>{{ member.photo_count }} photos</p>
+                        <span>Manage profile</span>
+                    </div>
+
+                </a>
+
+            {% endfor %}
+
+        </div>
+
+    </section>
+
+</div>
+
+{% endblock %}

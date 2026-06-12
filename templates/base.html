@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title> Family Focus</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="icon" href="data:image/svg+xml,
+    <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+        <text y='0.9em' font-size='90'>📸</text>
+    </svg>">
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+
+
+
+<div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="loading-box">
+        <div class="loader"></div>
+        <p id="loadingText">Working...</p>
+    </div>
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const toggle = document.getElementById("navbarToggle");
+    const links = document.getElementById("navbarLinks");
+
+    if (toggle && links) {
+        toggle.addEventListener("click", function () {
+            links.classList.toggle("show");
+        });
+    }
+});
+</script>
+
+
+<body>
+<nav class="navbar">
+
+    <a class="navbar-logo" href="{{ url_for('home') }}">
+        <span class="app-logo-icon">📸</span>
+        <span class="app-logo-text">Family Focus</span>
+    </a>
+
+    <button class="navbar-toggle" type="button" id="navbarToggle">
+        ☰
+    </button>
+
+    <div class="navbar-links" id="navbarLinks">
+
+        <a
+            href="{{ url_for('filter_photos_page') }}"
+            class="{% if request.endpoint in ['filter_photos_page', 'filter_photos_upload'] %}active{% endif %}"
+        >
+            Upload Photos
+        </a>
+
+        <a
+            href="{{ url_for('camera') }}"
+            class="{% if request.endpoint == 'camera' %}active{% endif %}"
+        >
+            Camera
+        </a>
+
+        <a
+            href="{{ url_for('home') }}"
+            class="{% if request.endpoint in ['home', 'member_page'] %}active{% endif %}"
+        >
+            Family Profiles
+        </a>
+
+    </div>
+
+</nav>
+<main class="container">
+    {% block content %}{% endblock %}
+</main>
+</body>
+
+
+
+<script>
+
+function toggleNavbar() {
+    document.getElementById("navbarLinks").classList.toggle("show");
+}
+
+function showLoading(message) {
+    const overlay = document.getElementById("loadingOverlay");
+    const text = document.getElementById("loadingText");
+
+    if (text) text.innerText = message || "Working...";
+    if (overlay) overlay.classList.remove("hidden");
+}
+
+document.addEventListener("submit", function (event) {
+    const form = event.target;
+
+    if (form.classList.contains("js-rebuild-form")) {
+        showLoading("Rebuilding face profile...");
+    }
+
+    if (form.classList.contains("js-detect-images-form")) {
+        showLoading("Detecting family members in images...");
+    }
+});
+</script>
+
+
+
+</html>

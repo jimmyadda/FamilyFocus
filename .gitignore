@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Flask
+instance/
+.flaskenv
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads
+static/uploads/
+uploads/
+incoming_uploads/
+profile_uploads/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Environment
+.env

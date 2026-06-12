@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}{{ member.name }} | Family Focus{% endblock %}
+
+{% block content %}
+
+{% set target_photos = 20 %}
+{% set photo_count = photos|length %}
+{% set progress = photo_count * 5 %}
+{% if progress > 100 %}
+    {% set progress = 100 %}
+{% endif %}
+
+
+<style>
+    .progress-fill {
+    width: var(--progress);
+    height: 100%;
+    background: linear-gradient(90deg, #f97316, #14b8a6);
+    border-radius: 999px;
+}
+</style>
+<div class="member-page-v2">
+
+    <section class="member-profile-card">
+
+        <div class="member-main-info">
+
+            <div class="member-big-avatar">
+                {{ member.name[0]|upper }}
+            </div>
+
+            <div>
+                <span class="member-badge">Face profile</span>
+
+                <h1>{{ member.name }}</h1>
+
+                <p>
+                    Upload clear photos from different angles to improve family detection accuracy.
+                </p>
+            </div>
+
+        </div>
+
+        <div class="profile-progress-card">
+            <div class="progress-top">
+                <strong>{{ photo_count }} / {{ target_photos }}</strong>
+                <span>Profile images</span>
+            </div>
+
+            <div class="profile-progress-bar">
+                <div class="progress-fill" style="--progress: {{ progress }}%;"></div>
+            </div>
+
+            {% if photo_count < 5 %}
+                <span class="profile-status status-red">Needs Training</span>
+            {% elif photo_count < 10 %}
+                <span class="profile-status status-orange">Learning</span>
+            {% elif photo_count < 20 %}
+                <span class="profile-status status-green">Ready</span>
+            {% else %}
+                <span class="profile-status status-blue">Excellent</span>
+            {% endif %}
+        </div>
+    <div class="stats-grid">
+
+        <div>
+            <strong>{{ photo_count }}</strong>
+            <span>Photos</span>
+        </div>
+
+            <div>
+                <strong>{{ accepted_count|default(0) }}</strong>
+                <span>Accepted</span>
+            </div>
+
+            <div>
+                <strong>{{ rejected_count|default(0) }}</strong>
+                <span>Rejected</span>
+            </div>
+
+    </div>
+
+</div>
+    </section>
+
+
+    <section class="member-actions-grid">
+
+        <form
+            class="member-upload-card js-upload-form"
+            method="POST"
+            action="{{ url_for('upload_member_photos', member_id=member.id) }}"
+            enctype="multipart/form-data"
+        >
+            <div class="member-card-icon">🖼️</div>
+
+            <h2>Upload profile photos</h2>
+
+            <p>
+                Add clear photos of {{ member.name }}. Use close-up images,
+                different angles, and different lighting.
+            </p>
+
+            <input type="file" name="photos" multiple required>
+
+            <button type="submit">
+                Upload Photos
+            </button>
+        </form>
+
+
+        <div class="member-tools-card">
+
+            <div class="member-card-icon">🧠</div>
+
+            <h2>Train recognition</h2>
+
+            <p>
+                Rebuild the face profile after uploading new photos.
+            </p>
+
+            <div class="member-tool-buttons">
+
+                <form
+                    method="POST"
+                    action="{{ url_for('rebuild_embeddings', member_id=member.id) }}"
+                    class="js-rebuild-form"
+                    enctype="multipart/form-data"
+                >
+                    <button type="submit" class="rebuild-btn">
+                        Rebuild Face Profile
+                    </button>
+                </form>
+
+                <a href="{{ url_for('camera') }}" class="camera-btn">
+                    Open Camera
+                </a>
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <section class="member-gallery-card">
+
+        <div class="member-gallery-header">
+            <div>
+                <h2>Uploaded photos</h2>
+                <p>{{ photo_count }} photos saved for {{ member.name }}</p>
+            </div>
+        </div>
+
+        {% if photos %}
+                <div class="member-photo-grid">
+                    {% for photo in photos %}
+                        {% set image_path = photo.file_path.replace('\\', '/') %}
+
+                        <div class="member-photo-card">
+                             <img
+                            src="{{ url_for('serve_profile_file', member_id=member.id, filename=photo.filename) }}"
+                            alt="{{ member.name }}"
+                        >
+                        </div>
+                    {% endfor %}
+                </div>
+
+        {% else %}
+
+            <div class="empty-member-gallery">
+                <div>📷</div>
+                <h3>No photos yet</h3>
+                <p>Upload clear face photos to start building this profile.</p>
+            </div>
+
+        {% endif %}
+
+    </section>
+
+</div>
+
+{% endblock %}            

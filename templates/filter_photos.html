@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Photos{% endblock %}
+
+{% block content %}
+
+<div class="filter-page-v2">
+
+    <section class="filter-hero-card">
+
+        <div class="filter-copy">
+            <span class="filter-badge">Bulk photo scan</span>
+
+            <h1>Upload group photos</h1>
+
+            <p>
+                Family Focus will scan your WhatsApp, school, trip, or event photos
+                and return only the pictures that contain your family.
+            </p>
+        </div>
+
+        <form
+            class="filter-upload-box js-detect-images-form"
+            method="POST"
+            action="{{ url_for('filter_photos_upload') }}"
+            enctype="multipart/form-data"
+        >
+            <div class="upload-icon-large">📁</div>
+
+            <h2>Select photos to scan</h2>
+            <p>Choose multiple JPG, JPEG, or PNG images.</p>
+
+            <input type="file" name="photos" multiple required>
+
+            <button type="submit">
+                Scan Photos
+            </button>
+        </form>
+
+    </section>
+
+</div>
+
+{% endblock %}
