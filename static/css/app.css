@@ -1576,3 +1576,59 @@ input[type="text"] {
         padding: 14px 16px;
     }
 }
+
+
+/*Photos Albums*/
+
+
+    .album-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 16px;
+}
+
+.album-card {
+    background: white;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+    transition: transform .15s ease;
+}
+
+.album-card:hover {
+    transform: translateY(-2px);
+}
+
+.album-card img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    display: block;
+}
+
+.album-card-footer {
+    padding: 10px;
+}
+
+.album-card-footer .btn {
+    width: 100%;
+    display: block;
+    text-align: center;
+}
+
+    @media (max-width: 768px) {
+
+    .album-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+}
+    @media (max-width: 420px) {
+
+    .album-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+    }
+
+}

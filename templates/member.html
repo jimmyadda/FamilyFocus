@@ -13,13 +13,174 @@
 
 
 <style>
+    
     .progress-fill {
     width: var(--progress);
     height: 100%;
     background: linear-gradient(90deg, #f97316, #14b8a6);
     border-radius: 999px;
 }
+
+
+.album-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    padding: 12px 18px;
+
+    background: linear-gradient(
+        135deg,
+        #fb923c,
+        #f59e0b,
+        #14b8a6
+    );
+
+    color: white;
+    font-weight: 700;
+    text-decoration: none;
+
+    border-radius: 999px;
+
+    box-shadow:
+        0 8px 20px rgba(249,115,22,.18);
+
+    transition: all .2s ease;
+}
+
+.album-btn:hover {
+    transform: translateY(-2px);
+    box-shadow:
+        0 12px 28px rgba(249,115,22,.25);
+}
+
+.album-btn:active {
+    transform: translateY(0);
+}
+
+.member-badges {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.detected-album-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    padding: 10px 16px;
+
+    border-radius: 999px;
+
+    text-decoration: none;
+
+    background: rgba(20,184,166,.10);
+
+    border: 1px solid rgba(20,184,166,.25);
+
+    color: #0f766e;
+
+    font-weight: 700;
+
+    transition: all .2s ease;
+}
+
+.detected-album-chip:hover {
+    background: rgba(20,184,166,.16);
+    transform: translateY(-1px);
+}
+
+.detected-album-chip .icon {
+    font-size: 15px;
+}
+.member-main-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+.member-badges {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+}
+
+.detected-album-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    padding: 10px 16px;
+    border-radius: 999px;
+
+    background: rgba(20, 184, 166, 0.10);
+    border: 1px solid rgba(20, 184, 166, 0.28);
+
+    color: #0f766e;
+    font-weight: 800;
+    font-size: 14px;
+    text-decoration: none;
+
+    transition: all .2s ease;
+}
+
+.detected-album-chip:hover {
+    background: rgba(20, 184, 166, 0.18);
+    transform: translateY(-1px);
+}
+
+.detected-album-chip .icon {
+    font-size: 14px;
+}
+
+.avatar-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #64748b;
+}
+.member-photo-card {
+    position: relative;
+}
+
+.photo-delete-form {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 10;
+}
+.photo-delete-btn {
+    width: 36px;
+    height: 36px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 0;
+
+    border: none;
+    border-radius: 50%;
+
+    background: rgba(37, 99, 235, .95);
+    color: white;
+
+    cursor: pointer;
+
+    font-size: 14px;
+    line-height: 1;
+}
+
+.photo-delete-btn:hover {
+    background: rgb(185,28,28);
+}
 </style>
+
+
+
 <div class="member-page-v2">
 
     <section class="member-profile-card">
@@ -27,18 +188,26 @@
         <div class="member-main-info">
 
             <div class="member-big-avatar">
-                {{ member.name[0]|upper }}
+                {{ member.name[:2]|upper }}
             </div>
+                <div class="avatar-name">
+                    {{ member.name }}
+                </div>
+                <div class="member-badges">
 
-            <div>
-                <span class="member-badge">Face profile</span>
+                    <a
+                        href="{{ url_for('member_album', member_id=member.id) }}"
+                        class="detected-album-chip"
+                    >
+                        <span class="icon">📸</span>
 
-                <h1>{{ member.name }}</h1>
+                        <span class="album-text">
+                            {{ detected_count }}
+                            detected photos
+                        </span>
+                    </a>
 
-                <p>
-                    Upload clear photos from different angles to improve family detection accuracy.
-                </p>
-            </div>
+                </div>
 
         </div>
 
@@ -159,6 +328,20 @@
                         {% set image_path = photo.file_path.replace('\\', '/') %}
 
                         <div class="member-photo-card">
+                           <form
+                                method="POST"
+                                action="{{ url_for('delete_member_photo', photo_id=photo.id) }}"
+                                class="photo-delete-form"
+                                onsubmit="return confirm('Delete this profile photo?')"
+                            >
+                                <button
+                                    type="submit"
+                                    class="photo-delete-btn"
+                                >
+                                    🗑
+                                </button>
+                            </form>
+
                              <img
                             src="{{ url_for('serve_profile_file', member_id=member.id, filename=photo.filename) }}"
                             alt="{{ member.name }}"

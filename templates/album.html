@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}
+Family Album
+{% endblock %}
+
+{% block content %}
+
+<div class="container">
+
+    <div class="page-header">
+        <h1>Family Album</h1>
+        <p>
+            All confirmed family photos detected by Family Focus.
+        </p>
+    </div>
+
+    {% if confirmed_photos %}
+
+        <div class="album-grid">
+
+            {% for photo in confirmed_photos %}
+
+            <div class="album-card">
+
+                {% set filename = photo.file_path.replace('\\', '/').split('/')[-1] %}
+
+            <a href="{{ url_for('serve_result_file', filename=filename) }}" target="_blank">
+                <img
+                    src="{{ url_for('serve_result_file', filename=filename) }}"
+                    alt="Family photo"
+                >
+            </a>
+
+            {% endfor %}
+
+        </div>
+
+    {% else %}
+
+        <div class="empty-state">
+            <h2>No family photos yet</h2>
+
+            <p>
+                Upload photos and Family Focus will build your family album automatically.
+            </p>
+
+            <a
+                href="{{ url_for('filter_photos_page') }}"
+                class="btn"
+            >
+                Upload Photos
+            </a>
+
+        </div>
+
+    {% endif %}
+
+</div>
+
+{% endblock %}

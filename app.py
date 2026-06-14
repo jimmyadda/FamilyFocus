@@ -6,6 +6,8 @@ import uuid
 from pathlib import Path
 
 import cv2
+from db_helpers import *
+
 import numpy as np
 from flask import (
     Flask,
@@ -73,213 +75,7 @@ TEMP_DIR = Path(DB_PATH).parent / "temp"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# -------------------------
-# Database helpers
-# -------------------------
 
-def database_read(query, params=()):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
-
-def database_write(query, params=()):
-    with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.execute(query, params)
-        conn.commit()
-        return cur.lastrowid
-
-def column_exists(table_name, column_name):
-    rows = database_read(f"PRAGMA table_info({table_name})")
-    return any(row["name"] == column_name for row in rows)
-
-def add_column_if_missing(table_name, column_name, column_sql):
-    if not column_exists(table_name, column_name):
-        database_write(f"""
-            ALTER TABLE {table_name}
-            ADD COLUMN {column_name} {column_sql}
-        """)
-
-def init_db():
-    PROFILE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    INCOMING_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    #Possible#
-    POSSIBLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    POSSIBLE_FACES_DIR.mkdir(parents=True, exist_ok=True)
-    #########
-    RESULTS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS family_members (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS member_photos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            member_id INTEGER NOT NULL,
-            file_path TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(member_id) REFERENCES family_members(id)
-        )
-    """)
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS member_embeddings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            member_id INTEGER NOT NULL,
-            photo_id INTEGER,
-            embedding TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    database_write("""
-            CREATE TABLE IF NOT EXISTS learning_reviews (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                member_id INTEGER,
-                action TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-    """)
-
-    database_write("""
-    CREATE TABLE IF NOT EXISTS families (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        family_name TEXT NOT NULL,
-        client_id TEXT UNIQUE NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-""")
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_id INTEGER NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            telegram_chat_id TEXT,
-            telegram_username TEXT,
-            role TEXT DEFAULT 'admin',
-            is_active INTEGER DEFAULT 1,
-            last_login TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    #Family ID 
-
-    add_column_if_missing(
-        "family_members",
-        "family_id",
-        "INTEGER"
-    )
-
-    add_column_if_missing(
-        "member_photos",
-        "family_id",
-        "INTEGER"
-    )
-
-    add_column_if_missing(
-        "member_embeddings",
-        "family_id",
-        "INTEGER"
-    )
-
-    add_column_if_missing(
-        "learning_reviews",
-        "family_id",
-        "INTEGER"
-    ) 
-
-    family_id = create_default_family()
-    assign_existing_data_to_family(family_id)   
-
-def seed_family_members():
-    family_id = create_default_family()
-
-    for name in [
-        "Karin",
-        "Erel",
-        "Emma",
-        "Eithan",
-        "Jimmy"
-    ]:
-        try:
-            database_write("""
-                INSERT INTO family_members (
-                    family_id,
-                    name
-                )
-                VALUES (?, ?)
-            """, (
-                family_id,
-                name
-            ))
-        except sqlite3.IntegrityError:
-            pass
-
-def create_default_family():
-    family = database_read("""
-        SELECT *
-        FROM families
-        WHERE client_id = ?
-    """, ("default-family",))
-
-    if family:
-        return family[0]["id"]
-
-    database_write("""
-        INSERT INTO families (
-            family_name,
-            client_id
-        )
-        VALUES (?, ?)
-    """, (
-        "Adda Family",
-        "default-family"
-    ))
-
-    family = database_read("""
-        SELECT *
-        FROM families
-        WHERE client_id = ?
-    """, ("default-family",))
-
-    return family[0]["id"]
-
-def assign_existing_data_to_family(family_id):
-    database_write("""
-        UPDATE family_members
-        SET family_id = ?
-        WHERE family_id IS NULL
-    """, (family_id,))
-
-    database_write("""
-        UPDATE member_photos
-        SET family_id = ?
-        WHERE family_id IS NULL
-    """, (family_id,))
-
-    database_write("""
-        UPDATE member_embeddings
-        SET family_id = ?
-        WHERE family_id IS NULL
-    """, (family_id,))
-
-    database_write("""
-        UPDATE learning_reviews
-        SET family_id = ?
-        WHERE family_id IS NULL
-    """, (family_id,))
-
-def get_current_family_id():
-    return 1
 
 
 # -------------------------
@@ -473,7 +269,9 @@ def image_contains_known_family(image_path, family_embeddings, DeepFace):
     return len(matches) > 0, matched_names, matches, possible_names, possible_matches
 
 
-#Member#
+# -------------------------
+# Members helpers
+# -------------------------
 
 
 def get_all_members():
@@ -526,7 +324,6 @@ def get_member(member_id):
 
     return rows[0] if rows else None
 
-
 def get_member_by_name(name):
     family_id = get_current_family_id()
 
@@ -541,6 +338,22 @@ def get_member_by_name(name):
     ))
 
     return rows[0] if rows else None
+
+def get_member_id_by_name(name, family_id):
+    rows = database_read(
+        """
+        SELECT id
+        FROM family_members
+        WHERE name = ?
+          AND family_id = ?
+        """,
+        (name, family_id)
+    )
+
+    if not rows:
+        return None
+
+    return rows[0]["id"]
 
 def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     member = get_member_by_name(member_name)
@@ -612,6 +425,8 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     print(f"Learned new embedding for {member_name}")
     return True
 
+
+
 # -------------------------
 # Main pages
 # -------------------------
@@ -637,6 +452,9 @@ def home():
     )
 
 
+# -------------------------
+# Member Routes
+# -------------------------
 @app.route("/members/create", methods=["POST"])
 def create_member():
     name = request.form.get("name", "").strip()
@@ -656,6 +474,8 @@ def create_member():
 @app.route("/members/<int:member_id>")
 @app.route("/member/<int:member_id>")
 def member_page(member_id):
+    family_id = get_current_family_id()
+
     rows = database_read(
         "SELECT * FROM family_members WHERE id = ?",
         (member_id,)
@@ -671,22 +491,123 @@ def member_page(member_id):
         SELECT *
         FROM member_photos
         WHERE member_id = ?
+        AND family_id = ?
         ORDER BY created_at DESC
         """,
-        (member_id,)
+        (member_id, family_id)
     )
 
     for photo in photos:
         photo["filename"] = Path(photo["file_path"]).name
 
+    detected_count_row = database_read(
+        """
+        SELECT COUNT(DISTINCT photo_id) AS count
+        FROM photo_detections
+        WHERE family_id = ?
+        AND member_id = ?
+        AND status = 'confirmed'
+        """,
+        (family_id, member_id)
+    )
+
+    detected_count = detected_count_row[0]["count"]
+
     return render_template(
         "member.html",
         member=member,
         photos=photos,
+        detected_count=detected_count,
         deepface_available=DeepFace is not None
     )
 
+# album - new focus
 
+@app.route("/album")
+def family_album():
+    family_id = get_current_family_id()
+
+    confirmed_photos = get_confirmed_family_photos(family_id)
+    possible_photos = get_possible_family_photos(family_id)
+
+    return render_template(
+        "album.html",
+        confirmed_photos=confirmed_photos,
+        possible_photos=possible_photos
+    )
+
+@app.route("/member/<int:member_id>/album")
+def member_album(member_id):
+    family_id = get_current_family_id()
+
+    member = database_read(
+        """
+        SELECT *
+        FROM family_members
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (member_id, family_id)
+    )
+
+    if not member:
+        flash("Member not found.")
+        return redirect(url_for("index"))
+
+    photos = get_member_detected_album(family_id, member_id)
+
+    return render_template(
+        "member_album.html",
+        member=member[0],
+        photos=photos
+    )
+
+@app.route("/detections/<int:detection_id>/confirm", methods=["POST"])
+def confirm_detection(detection_id):
+    family_id = get_current_family_id()
+
+    detection = database_read(
+        """
+        SELECT *
+        FROM photo_detections
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (detection_id, family_id)
+    )
+
+    if not detection:
+        return {"success": False, "message": "Detection not found"}, 404
+
+    database_write(
+        """
+        UPDATE photo_detections
+        SET status = 'confirmed',
+            confirmed_by_user = 1
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (detection_id, family_id)
+    )
+
+    return {"success": True}
+
+
+@app.route("/detections/<int:detection_id>/reject", methods=["POST"])
+def reject_detection(detection_id):
+    family_id = get_current_family_id()
+
+    database_write(
+        """
+        UPDATE photo_detections
+        SET status = 'rejected'
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (detection_id, family_id)
+    )
+
+    return {"success": True}
 # -------------------------
 # Profile photo upload
 # -------------------------
@@ -759,6 +680,49 @@ def upload_member_photos(member_id):
     flash(f"Uploaded {saved} photos. Skipped {skipped}.")
     return redirect(url_for("member_page", member_id=member_id))
 
+
+@app.route("/member-photo/<int:photo_id>/delete", methods=["POST"])
+def delete_member_photo(photo_id):
+
+    photo = database_read(
+        """
+        SELECT *
+        FROM member_photos
+        WHERE id = ?
+        """,
+        (photo_id,)
+    )
+
+    if not photo:
+        flash("Photo not found.")
+        return redirect(request.referrer)
+
+    photo = photo[0]
+
+    try:
+        Path(photo["file_path"]).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    database_write(
+        """
+        DELETE FROM member_photos
+        WHERE id = ?
+        """,
+        (photo_id,)
+    )
+
+    database_write(
+        """
+        DELETE FROM member_embeddings
+        WHERE photo_id = ?
+        """,
+        (photo_id,)
+    )
+
+    flash("Profile photo deleted.")
+
+    return redirect(request.referrer)
 
 @app.route("/profile-file/<int:member_id>/<filename>")
 def serve_profile_file(member_id, filename):
@@ -999,6 +963,8 @@ def filter_photos_upload():
     possible = []
     skipped = 0
 
+    family_id = get_current_family_id()
+
     family_embeddings = get_all_family_embeddings()
     print("FAMILY EMBEDDINGS LOADED:", len(family_embeddings))
 
@@ -1032,6 +998,30 @@ def filter_photos_upload():
                 result_path
             )
 
+            photo_id = create_family_photo(
+                family_id=family_id,
+                file_path=result_path,
+                original_filename=file.filename,
+                source="web"
+            )
+
+            for match in matches:
+                name = match.get("name")
+                distance = match.get("distance")
+
+                member_id = get_member_id_by_name(name, family_id)
+
+                if member_id:
+                    create_photo_detection(
+                        family_id=family_id,
+                        photo_id=photo_id,
+                        member_id=member_id,
+                        face_crop_path=None,
+                        distance=distance,
+                        status="confirmed",
+                        confirmed_by_user=0
+                    )
+
             kept.append({
                 "filename": filename,
                 "original": original,
@@ -1055,6 +1045,30 @@ def filter_photos_upload():
                 possible_path
             )
 
+            photo_id = create_family_photo(
+                family_id=family_id,
+                file_path=possible_path,
+                original_filename=file.filename,
+                source="web"
+            )
+
+            for match in possible_matches:
+                name = match.get("name")
+                distance = match.get("distance")
+
+                member_id = get_member_id_by_name(name, family_id)
+
+                if member_id:
+                    create_photo_detection(
+                        family_id=family_id,
+                        photo_id=photo_id,
+                        member_id=member_id,
+                        face_crop_path=None,
+                        distance=distance,
+                        status="possible",
+                        confirmed_by_user=0
+                    )
+
             possible.append({
                 "filename": filename,
                 "original": original,
@@ -1076,7 +1090,9 @@ def filter_photos_upload():
                 incoming_path.unlink()
             except Exception:
                 pass
+
     get_flashed_messages()
+
     return render_template(
         "filter_results.html",
         kept=kept,
