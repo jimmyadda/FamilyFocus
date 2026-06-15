@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+
+{% block title %}
+Review Faces
+{% endblock %}
+
+{% block content %}
+
+<style>
+
+.review-page{
+    max-width:1200px;
+    margin:auto;
+}
+
+.review-header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:24px;
+    flex-wrap:wrap;
+    gap:12px;
+}
+
+.review-header h1{
+    margin:0;
+}
+
+.review-rescan-btn{
+    background:#fb923c;
+    color:white;
+    text-decoration:none;
+    padding:12px 18px;
+    border-radius:14px;
+    font-weight:700;
+}
+
+.review-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+    gap:22px;
+}
+
+.review-card{
+    background:white;
+    border-radius:22px;
+    padding:14px;
+    box-shadow:0 8px 24px rgba(0,0,0,.08);
+}
+
+.review-image-wrap{
+    position:relative;
+    overflow:hidden;
+    border-radius:18px;
+    background:#f8fafc;
+}
+
+.review-image-wrap img{
+    width:100%;
+    display:block;
+}
+
+.face-box{
+    position:absolute;
+    border:3px solid #fb923c;
+    border-radius:12px;
+    pointer-events:none;
+}
+
+.review-status{
+    margin-top:10px;
+    font-size:13px;
+    color:#64748b;
+}
+
+.review-form{
+    display:flex;
+    gap:10px;
+    margin-top:14px;
+}
+
+.review-form select{
+    flex:1;
+    border:1px solid #cbd5e1;
+    border-radius:12px;
+    padding:10px;
+}
+
+.review-form button{
+    border:none;
+    background:#10b981;
+    color:white;
+    padding:10px 16px;
+    border-radius:12px;
+    cursor:pointer;
+    font-weight:700;
+}
+
+.empty-review{
+    text-align:center;
+    padding:50px;
+    color:#64748b;
+}
+.face-box{
+    position:absolute;
+    border:3px solid #fb923c;
+    border-radius:12px;
+    background:rgba(255,255,255,.08);
+    cursor:pointer;
+    z-index:5;
+    pointer-events:auto;
+}
+
+.face-box.selected{
+    border-color:#10b981;
+    background:rgba(16,185,129,.18);
+    box-shadow:0 0 0 4px rgba(16,185,129,.25);
+}
+</style>
+
+<div class="review-page">
+
+    <div class="review-header">
+        <h1>Review Faces</h1>
+
+        <a
+            class="review-rescan-btn"
+            href="{{ url_for('rescan_skipped') }}">
+            Rescan Skipped Photos
+        </a>
+    </div>
+
+    {% if not review_photos %}
+
+        <div class="empty-review">
+            No faces waiting for review.
+        </div>
+
+    {% else %}
+
+    <div class="review-grid">
+
+        {% for photo in review_photos %}
+        <div class="review-card">
+
+            <div class="review-image-wrap">
+                <img src="{{ url_for('serve_skipped_file', filename=photo.photo_path.replace('skipped/', '')) }}">
+
+                {% for face in photo.faces %}
+                    {% if face.box_x_percent != None %}
+                    <button
+                        type="button"
+                        class="face-box"
+                        data-review-id="{{ face.id }}"
+                        style="left:{{ face.box_x_percent }}%;
+                            top:{{ face.box_y_percent }}%;
+                            width:{{ face.box_w_percent }}%;
+                            height:{{ face.box_h_percent }}%;">
+                    </button>
+                    {% endif %}
+                {% endfor %}
+            </div>
+
+            <form class="review-form" method="POST">
+                <input type="hidden" name="selected_review_id" class="selected-review-id">
+
+                <select name="member_id" required>
+                    <option value="">Select family member</option>
+                    {% for member in members %}
+                    <option value="{{ member.id }}">{{ member.name }}</option>
+                    {% endfor %}
+                </select>
+
+                <button type="submit">Save</button>
+            </form>
+
+        </div>
+        {% endfor %}
+
+    </div>
+
+    {% endif %}
+
+</div>
+
+
+<script>
+document.querySelectorAll(".review-card").forEach(card => {
+    const form = card.querySelector(".review-form");
+    const hidden = card.querySelector(".selected-review-id");
+
+    card.querySelectorAll(".face-box").forEach(box => {
+        box.addEventListener("click", () => {
+            console.log("Clicked box with review ID:", box.dataset.reviewId);
+            card.querySelectorAll(".face-box").forEach(b => b.classList.remove("selected"));
+            box.classList.add("selected");
+            hidden.value = box.dataset.reviewId;
+            form.action = `/review-face/${box.dataset.reviewId}`;
+        });
+    });
+
+    form.addEventListener("submit", e => {
+        if (!hidden.value) {
+            e.preventDefault();
+            alert("Click a face first.");
+        }
+    });
+});
+
+
+
+</script>
+
+{% endblock %}

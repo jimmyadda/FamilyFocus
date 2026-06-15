@@ -5,6 +5,87 @@ Family Album
 {% endblock %}
 
 {% block content %}
+<style>
+.album-member-filter {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 24px;
+    overflow-x: auto;
+    padding: 8px;
+}
+
+.album-member-card {
+    text-decoration: none;
+    text-align: center;
+    flex: 0 0 auto;
+}
+
+.album-member-avatar {
+    width: 52px;
+    height: 52px;
+
+    border-radius: 22px;
+
+    background: linear-gradient(
+        135deg,
+        #fb923c,
+        #2dd4bf
+    );
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    color: white;
+    font-size: 25px;
+    font-weight: 600;
+
+    transition: all .2s ease;
+}
+
+.album-member-name {
+    margin-top: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #64748b;
+}
+
+.album-member-card.active .album-member-avatar {
+    box-shadow: 0 0 0 3px #f97316;
+}
+
+.album-member-card.active .album-member-name {
+    color: #ea580c;
+}
+
+.album-people {
+    margin-top: 6px;
+}
+.album-people {
+    padding: 10px 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.person-chip {
+    display: inline-flex;
+    align-items: center;
+
+    background: rgba(45,212,191,.08);
+    border: 1px solid rgba(45,212,191,.20);
+
+    color: #0f766e;
+
+    padding: 4px 10px;
+    border-radius: 999px;
+
+    font-size: 12px;
+    font-weight: 700;
+
+    line-height: 1.2;
+}
+</style>
 
 <div class="container">
 
@@ -14,6 +95,38 @@ Family Album
             All confirmed family photos detected by Family Focus.
         </p>
     </div>
+<div class="album-member-filter">
+
+<a
+    href="{{ url_for('family_album') }}"
+    class="album-member-card {% if not selected_member_id %}active{% endif %}"
+>
+    <div class="album-member-avatar">
+        ALL
+    </div>
+
+    <div class="album-member-name">
+        Everyone
+    </div>
+</a>
+
+    {% for member in members %}
+        <a
+            href="{{ url_for('family_album', member_id=member.id) }}"
+            class="album-member-card {% if selected_member_id == member.id %}active{% endif %}"
+        >
+            <div class="album-member-avatar">
+                {{ member.name[:2]|upper }}
+            </div>
+
+            <div class="album-member-name">
+                {{ member.name }}
+            </div>
+        </a>
+    {% endfor %}
+
+</div>
+
 
     {% if confirmed_photos %}
 
@@ -32,10 +145,16 @@ Family Album
                 >
             </a>
 
-            {% endfor %}
 
+                <div class="album-people">
+                    {% for person in photo.people %}
+                        <span class="person-chip">
+                            {{ person.name }}
+                        </span>
+                    {% endfor %}
+                </div>
         </div>
-
+            {% endfor %}
     {% else %}
 
         <div class="empty-state">

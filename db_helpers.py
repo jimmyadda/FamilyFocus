@@ -1,6 +1,6 @@
 from pathlib import Path
 import sqlite3
-
+import hashlib
 from config import (
     BASE_CLIENT_DIR,
     DB_PATH,
@@ -18,8 +18,11 @@ from config import (
 POSSIBLE_UPLOAD_DIR = BASE_CLIENT_DIR / "possible"
 POSSIBLE_FACES_DIR = BASE_CLIENT_DIR / "possible_faces"
 
-POSSIBLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)    
+POSSIBLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)  
 
+
+SKIPPED_UPLOAD_DIR = BASE_CLIENT_DIR / "skipped"
+SKIPPED_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
 
@@ -27,16 +30,43 @@ TEMP_DIR = Path(DB_PATH).parent / "temp"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def calculate_file_hash(file_path):
+    hasher = hashlib.sha256()
+
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hasher.update(chunk)
+
+    return hasher.hexdigest()
 
 def create_family_photo(family_id, file_path, original_filename=None, source="web"):
-    return database_write(
+    file_hash = calculate_file_hash(file_path)
+    existing = database_read(
         """
-        INSERT INTO family_photos (family_id, file_path, original_filename, source)
-        VALUES (?, ?, ?, ?)
+        SELECT id
+        FROM family_photos
+        WHERE family_id = ?
+          AND file_hash = ?
         """,
-        (family_id, str(file_path), original_filename, source)
+        (family_id, file_hash)
     )
 
+    if existing:
+        return existing[0]['id']
+
+    return database_write(
+        """
+        INSERT INTO family_photos (
+            family_id,
+            file_path,
+            original_filename,
+            source,
+            file_hash
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (family_id, str(file_path), original_filename, source, file_hash)
+    )
 
 def create_photo_detection(
     family_id,
@@ -46,8 +76,39 @@ def create_photo_detection(
     distance,
     status,
     confirmed_by_user=0
-):
-    database_write(
+    ):
+    existing = database_read(
+        """
+        SELECT id, status
+        FROM photo_detections
+        WHERE family_id = ?
+          AND photo_id = ?
+          AND member_id = ?
+        """,
+        (family_id, photo_id, member_id)
+    )
+
+    if existing:
+        existing_status = existing[0]["status"]
+
+        if existing_status == "confirmed":
+            return existing[0]["id"]
+
+        if existing_status == "possible" and status == "confirmed":
+            database_write(
+                """
+                UPDATE photo_detections
+                SET status = 'confirmed',
+                    distance = ?,
+                    confirmed_by_user = ?
+                WHERE id = ?
+                """,
+                (distance, confirmed_by_user, existing[0]["id"])
+            )
+
+        return existing[0]["id"]
+
+    return database_write(
         """
         INSERT INTO photo_detections
         (family_id, photo_id, member_id, face_crop_path, distance, status, confirmed_by_user)
@@ -64,6 +125,19 @@ def create_photo_detection(
         )
     )
 
+def detection_exists(photo_id, member_id, status):
+    rows = database_read(
+        """
+        SELECT id
+        FROM photo_detections
+        WHERE photo_id = ?
+          AND member_id = ?
+          AND status = ?
+        """,
+        (photo_id, member_id, status)
+    )
+
+    return len(rows) > 0
 # -------------------------
 # Database helpers
 # -------------------------
@@ -108,63 +182,77 @@ def init_db():
     """)
 
     database_write("""
-            CREATE TABLE IF NOT EXISTS learning_reviews (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                member_id INTEGER,
-                action TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-    """)
-
-    database_write("""
-    CREATE TABLE IF NOT EXISTS families (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        family_name TEXT NOT NULL,
-        client_id TEXT UNIQUE NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-""")
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE IF NOT EXISTS learning_reviews (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+
             family_id INTEGER NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            telegram_chat_id TEXT,
-            telegram_username TEXT,
-            role TEXT DEFAULT 'admin',
-            is_active INTEGER DEFAULT 1,
-            last_login TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+            photo_id INTEGER,
+            photo_path TEXT,
+
+            face_crop_path TEXT,
+
+            box_x INTEGER,
+            box_y INTEGER,
+            box_w INTEGER,
+            box_h INTEGER,
+            predicted_member_id INTEGER,
+            reviewed_member_id INTEGER,
+            distance REAL,
+            action TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    #Family ID 
+    database_write("""
+        CREATE TABLE IF NOT EXISTS families (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_name TEXT NOT NULL,
+            client_id TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+    database_write("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                family_id INTEGER NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                telegram_chat_id TEXT,
+                telegram_username TEXT,
+                role TEXT DEFAULT 'admin',
+                is_active INTEGER DEFAULT 1,
+                last_login TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        #Family ID 
 
     add_column_if_missing(
-        "family_members",
-        "family_id",
-        "INTEGER"
-    )
+            "family_members",
+            "family_id",
+            "INTEGER"
+        )
 
     add_column_if_missing(
-        "member_photos",
-        "family_id",
-        "INTEGER"
-    )
+            "member_photos",
+            "family_id",
+            "INTEGER"
+        )
 
     add_column_if_missing(
-        "member_embeddings",
-        "family_id",
-        "INTEGER"
-    )
+            "member_embeddings",
+            "family_id",
+            "INTEGER"
+        )
 
     add_column_if_missing(
-        "learning_reviews",
-        "family_id",
-        "INTEGER"
-    ) 
+            "learning_reviews",
+            "family_id",
+            "INTEGER"
+        ) 
 
     database_write("""
         CREATE TABLE IF NOT EXISTS family_photos (
@@ -202,10 +290,56 @@ def init_db():
         "family_id",
         "INTEGER"
     )
+
+    add_column_if_missing(
+        "family_photos",
+        "file_hash",
+        "TEXT"
+    )
+    database_write("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_family_photo_hash
+    ON family_photos(family_id, file_hash)
+    """)
+    
+    database_write("""
+        CREATE TABLE IF NOT EXISTS photo_faces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            photo_id INTEGER NOT NULL,
+            face_crop_path TEXT,
+            box_x INTEGER,
+            box_y INTEGER,
+            box_w INTEGER,
+            box_h INTEGER,
+            predicted_member_id INTEGER,
+            predicted_name TEXT,
+            distance REAL,
+            status TEXT, -- confirmed / possible / unknown / rejected / manual
+            reviewed_member_id INTEGER,
+            reviewed_at TEXT
+        )
+    """)
+
+    #Learning_Review#
+    add_column_if_missing("learning_reviews", "family_id", "INTEGER")
+    add_column_if_missing("learning_reviews", "photo_id", "INTEGER")
+    add_column_if_missing("learning_reviews", "photo_path", "TEXT")
+    add_column_if_missing("learning_reviews", "face_crop_path", "TEXT")
+
+    add_column_if_missing("learning_reviews", "box_x", "INTEGER")
+    add_column_if_missing("learning_reviews", "box_y", "INTEGER")
+    add_column_if_missing("learning_reviews", "box_w", "INTEGER")
+    add_column_if_missing("learning_reviews", "box_h", "INTEGER")
+
+    add_column_if_missing("learning_reviews", "predicted_member_id", "INTEGER")
+    add_column_if_missing("learning_reviews", "reviewed_member_id", "INTEGER")
+    add_column_if_missing("learning_reviews", "distance", "REAL")
+    add_column_if_missing("learning_reviews", "image_w", "INTEGER")
+    add_column_if_missing("learning_reviews", "image_h", "INTEGER")
+
+
     family_id = create_default_family()
     assign_existing_data_to_family(family_id)   
     fix_family_members_unique_constraint()
-
 
 def seed_family_members():
     family_id = create_default_family()
@@ -388,7 +522,21 @@ def get_photo_people(family_id, photo_id):
         (family_id, photo_id)
     )
 
-
+def get_family_members_with_detections(family_id):
+    return database_read(
+        """
+        SELECT DISTINCT
+            fm.id,
+            fm.name
+        FROM family_members fm
+        JOIN photo_detections pd ON pd.member_id = fm.id
+        WHERE fm.family_id = ?
+          AND pd.status = 'confirmed'
+        ORDER BY fm.name
+        """,
+        (family_id,)
+    )
+   
 def fix_family_members_unique_constraint():
     database_write("""
         CREATE TABLE IF NOT EXISTS family_members_new (
@@ -421,3 +569,111 @@ def fix_family_members_unique_constraint():
         ALTER TABLE family_members_new
         RENAME TO family_members
     """)
+
+
+def save_learning_review(
+    family_id,
+    photo_path,
+    face_crop_path,
+    predicted_member_id,
+    reviewed_member_id,
+    distance,
+    action,
+    box_x=None,
+    box_y=None,
+    box_w=None,
+    box_h=None,
+    image_w=None,
+    image_h=None,
+    photo_id=None
+):
+    database_write("""
+        INSERT INTO learning_reviews (
+            family_id,
+            photo_id,
+            photo_path,
+            face_crop_path,
+            box_x,
+            box_y,
+            box_w,
+            box_h,
+            image_w,
+            image_h,
+            predicted_member_id,
+            reviewed_member_id,
+            distance,
+            action
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        family_id,
+        photo_id,
+        str(photo_path) if photo_path else None,
+        str(face_crop_path) if face_crop_path else None,
+        box_x,
+        box_y,
+        box_w,
+        box_h,
+        image_w,
+        image_h,
+        predicted_member_id,
+        reviewed_member_id,
+        distance,
+        action
+    ))
+
+def extract_faces_for_review(image_path, filename, DeepFace):
+    import cv2
+
+    image = cv2.imread(str(image_path))
+
+    if image is None:
+        return []
+
+    image_h, image_w = image.shape[:2]
+
+    faces_for_review = []
+
+    try:
+        faces = DeepFace.extract_faces(
+            img_path=str(image_path),
+            detector_backend="retinaface",
+            enforce_detection=False,
+            align=True
+        )
+    except Exception as e:
+        print("Review face extract error:", e)
+        return []
+
+    for index, face in enumerate(faces):
+        area = face.get("facial_area", {})
+
+        x = int(area.get("x", 0))
+        y = int(area.get("y", 0))
+        w = int(area.get("w", 0))
+        h = int(area.get("h", 0))
+
+        if w <= 0 or h <= 0:
+            continue
+
+        crop = image[y:y+h, x:x+w]
+
+        if crop.size == 0:
+            continue
+
+        face_crop_filename = f"{Path(filename).stem}_unknown_{index}.jpg"
+        face_crop_path = POSSIBLE_FACES_DIR / face_crop_filename
+
+        cv2.imwrite(str(face_crop_path), crop)
+
+        faces_for_review.append({
+            "face_crop_filename": face_crop_filename,
+            "box_x": x,
+            "box_y": y,
+            "box_w": w,
+            "box_h": h,
+            "image_w": image_w,
+            "image_h": image_h
+        })
+
+    return faces_for_review    

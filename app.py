@@ -67,7 +67,8 @@ POSSIBLE_UPLOAD_DIR = BASE_CLIENT_DIR / "possible"
 POSSIBLE_FACES_DIR = BASE_CLIENT_DIR / "possible_faces"
 
 POSSIBLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)    
-
+SKIPPED_UPLOAD_DIR = BASE_CLIENT_DIR / "skipped"
+SKIPPED_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
 
@@ -392,8 +393,15 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
         print("Learning rejected - face too far from profile")
         return False
 
-    profile_filename = f"{uuid.uuid4()}.jpg"
-    profile_path = PROFILE_UPLOAD_DIR / profile_filename
+    member_profile_dir = PROFILE_UPLOAD_DIR / str(member_id)
+    member_profile_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(face_crop_path).suffix.lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+        ext = ".jpg"
+
+    profile_filename = f"{uuid.uuid4()}{ext}"
+    profile_path = member_profile_dir / profile_filename
 
     shutil.copy(str(face_crop_path), str(profile_path))
     
@@ -430,11 +438,6 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
 # -------------------------
 # Main pages
 # -------------------------
-@app.before_request
-def log_every_request():
-    print("REQUEST:", request.method, request.path)
-    print("CONTENT LENGTH:", request.content_length)
-
 @app.route("/")
 def home():
     members = get_all_members()
@@ -527,13 +530,29 @@ def member_page(member_id):
 def family_album():
     family_id = get_current_family_id()
 
-    confirmed_photos = get_confirmed_family_photos(family_id)
+    selected_member_id = request.args.get("member_id", type=int)
+
+    members = get_family_members_with_detections(family_id)
+
+    if selected_member_id:
+        confirmed_photos = get_member_detected_album(
+            family_id,
+            selected_member_id
+        )
+    else:
+        confirmed_photos = get_confirmed_family_photos(family_id)
+
+    for photo in confirmed_photos:
+        photo["people"] = get_photo_people(family_id, photo["id"])
+
     possible_photos = get_possible_family_photos(family_id)
 
     return render_template(
         "album.html",
         confirmed_photos=confirmed_photos,
-        possible_photos=possible_photos
+        possible_photos=possible_photos,
+        members=members,
+        selected_member_id=selected_member_id
     )
 
 @app.route("/member/<int:member_id>/album")
@@ -946,6 +965,14 @@ def recognize_frame():
 # -------------------------
 # Photo filtering
 # -------------------------
+@app.route("/family-file/<path:filename>")
+def family_file(filename):
+    family_id = get_current_family_id()
+
+    base_dir = INSTANCE_DIR / str(family_id)
+
+    return send_from_directory(base_dir, filename)
+
 
 @app.route("/filter-photos")
 def filter_photos_page():
@@ -1084,7 +1111,31 @@ def filter_photos_upload():
                 pass
 
         else:
-            skipped += 1
+            skipped_path = SKIPPED_UPLOAD_DIR / filename
+            shutil.copy(str(incoming_path), str(skipped_path))
+
+            unknown_faces = extract_faces_for_review(
+                incoming_path,
+                filename,
+                DeepFace
+            )
+
+            for face in unknown_faces:
+                save_learning_review(
+                    family_id=family_id,
+                    photo_path=filename,
+                    face_crop_path=f"possible_faces/{face['face_crop_filename']}",
+                    predicted_member_id=None,
+                    reviewed_member_id=None,
+                    distance=None,
+                    action="unknown",
+                    box_x=face["box_x"],
+                    box_y=face["box_y"],
+                    box_w=face["box_w"],
+                    box_h=face["box_h"],
+                    image_w=face["image_w"],
+                    image_h=face["image_h"]
+                )
 
             try:
                 incoming_path.unlink()
@@ -1104,6 +1155,15 @@ def filter_photos_upload():
 def serve_result_file(filename):
     return send_from_directory(RESULTS_UPLOAD_DIR, filename)
 
+@app.route("/serve-skipped/<path:filename>")
+def serve_skipped_file(filename):
+    filename = filename.replace("skipped/", "")
+
+    return send_from_directory(
+        SKIPPED_UPLOAD_DIR,
+        filename
+    )
+    
 @app.route("/possible/<filename>")
 def serve_possible_file(filename):
     return send_from_directory(POSSIBLE_UPLOAD_DIR, filename)
@@ -1118,7 +1178,7 @@ def review_possible_photo(filename, action):
 
     possible_path = POSSIBLE_UPLOAD_DIR / filename
     result_path = RESULTS_UPLOAD_DIR / filename
-
+    face_crop_path = POSSIBLE_FACES_DIR / face_crop if face_crop else None
     if not possible_path.exists():
         message = "Possible photo not found."
 
@@ -1139,27 +1199,22 @@ def review_possible_photo(filename, action):
             member_id = member["id"]
 
     if action == "yes":
-        if member_name and face_crop:
-            face_crop_path = POSSIBLE_FACES_DIR / face_crop
-
-            if face_crop_path.exists():
-                save_accepted_face_embedding(
-                    member_name,
-                    str(face_crop_path),
-                    DeepFace
-                )
+        if member_name and face_crop_path and face_crop_path.exists():
+            save_accepted_face_embedding(
+                member_name,
+                str(face_crop_path),
+                DeepFace
+            )
 
         if member_id:
-            database_write(
-                """
-                INSERT INTO learning_reviews (
-                    family_id,
-                    member_id,
-                    action
-                )
-                VALUES (?, ?, ?)
-                """,
-                (family_id, member_id, "accepted")
+            save_learning_review(
+                family_id=family_id,
+                photo_path=possible_path,
+                face_crop_path=face_crop_path,
+                predicted_member_id=member_id,
+                reviewed_member_id=member_id,
+                distance=None,
+                action="accepted"
             )
 
         shutil.move(str(possible_path), str(result_path))
@@ -1168,16 +1223,14 @@ def review_possible_photo(filename, action):
 
     elif action == "no":
         if member_id:
-            database_write(
-                """
-                INSERT INTO learning_reviews (
-                    family_id,
-                    member_id,
-                    action
-                )
-                VALUES (?, ?, ?)
-                """,
-                (family_id, member_id, "rejected")
+            save_learning_review(
+                family_id=family_id,
+                photo_path=possible_path,
+                face_crop_path=face_crop_path,
+                predicted_member_id=member_id,
+                reviewed_member_id=None,
+                distance=None,
+                action="rejected"
             )
 
         possible_path.unlink()
@@ -1209,6 +1262,159 @@ def review_possible_photo(filename, action):
 
     flash(message)
     return redirect(url_for("filter_photos_page"))
+
+# Fix detections mistakenly marked skipped
+@app.route("/review")
+def review_page():
+    family_id = get_current_family_id()
+
+    members = database_read("""
+        SELECT id, name
+        FROM family_members
+        WHERE family_id = ?
+        ORDER BY name
+    """, (family_id,))
+
+    rows = database_read("""
+        SELECT *
+        FROM learning_reviews
+        WHERE family_id = ?
+          AND action IN ('unknown', 'manual', 'rejected')
+          AND photo_path IS NOT NULL
+        ORDER BY created_at DESC
+    """, (family_id,))
+
+    photos = {}
+
+    for item in rows:
+        key = item["photo_path"]
+
+        if key not in photos:
+            photos[key] = {
+                "photo_path": key,
+                "faces": []
+            }
+
+        image_w = item.get("image_w")
+        image_h = item.get("image_h")
+
+        if item.get("box_x") is not None and image_w and image_h:
+            item["box_x_percent"] = (item["box_x"] / image_w) * 100
+            item["box_y_percent"] = (item["box_y"] / image_h) * 100
+            item["box_w_percent"] = (item["box_w"] / image_w) * 100
+            item["box_h_percent"] = (item["box_h"] / image_h) * 100
+        else:
+            item["box_x_percent"] = None
+
+        photos[key]["faces"].append(item)
+
+    return render_template(
+        "review.html",
+        members=members,
+        review_photos=list(photos.values())
+    )
+
+@app.route("/review-face/<int:review_id>", methods=["POST"])
+def review_face(review_id):
+    family_id = get_current_family_id()
+    reviewed_member_id = request.form.get("member_id", type=int)
+
+    review = database_read("""
+        SELECT *
+        FROM learning_reviews
+        WHERE id = ?
+          AND family_id = ?
+    """, (review_id, family_id))
+
+    if not review:
+        flash("Review item not found.")
+        return redirect(url_for("review_page"))
+
+    review = review[0]
+
+    member = database_read("""
+        SELECT *
+        FROM family_members
+        WHERE id = ?
+          AND family_id = ?
+    """, (reviewed_member_id, family_id))
+
+    if not member:
+        flash("Member not found.")
+        return redirect(url_for("review_page"))
+
+    member = member[0]
+
+    skipped_filename = review["photo_path"].replace("skipped/", "")
+    skipped_path = SKIPPED_UPLOAD_DIR / skipped_filename
+    result_path = RESULTS_UPLOAD_DIR / skipped_filename
+
+    if skipped_path.exists() and not result_path.exists():
+        shutil.copy(str(skipped_path), str(result_path))
+
+    photo_id = review["photo_id"]
+
+    if not photo_id:
+        photo_id = create_family_photo(
+            family_id=family_id,
+            file_path=result_path,
+            original_filename=skipped_filename,
+            source="manual-review"
+        )
+
+    create_photo_detection(
+        family_id=family_id,
+        photo_id=photo_id,
+        member_id=reviewed_member_id,
+        face_crop_path=review["face_crop_path"],
+        distance=review["distance"],
+        status="confirmed",
+        confirmed_by_user=1
+    )
+
+    if review["face_crop_path"] and Path(review["face_crop_path"]).exists():
+        save_accepted_face_embedding(
+            member["name"],
+            review["face_crop_path"],
+            DeepFace
+        )
+
+    database_write("""
+        UPDATE learning_reviews
+        SET reviewed_member_id = ?,
+            action = 'resolved'
+        WHERE id = ?
+          AND family_id = ?
+    """, (reviewed_member_id, review_id, family_id))
+
+    flash(f"Saved as {member['name']}.")
+    return redirect(url_for("review_page"))
+
+@app.route("/rescan-skipped")
+def rescan_skipped():
+    family_id = get_current_family_id()
+    family_embeddings = get_all_family_embeddings(family_id)
+
+    count = 0
+
+    for file in SKIPPED_UPLOAD_DIR.iterdir():
+        if not file.is_file():
+            continue
+
+        found, matched_names, matches = image_contains_known_family(
+            file,
+            family_embeddings,
+            DeepFace
+        )
+
+        if found:
+            result_path = RESULTS_UPLOAD_DIR / file.name
+            shutil.move(str(file), str(result_path))
+            count += 1
+
+    flash(f"Rescanned skipped photos. Found {count} new matches.")
+    return redirect(url_for("review_page"))
+
 # -------------------------
 # Run app
 # -------------------------
