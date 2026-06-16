@@ -85,6 +85,20 @@ Family Album
 
     line-height: 1.2;
 }
+
+.person-chip-form {
+    margin: 0;
+}
+
+.review-chip {
+    border: none;
+    cursor: pointer;
+}
+
+.review-chip:hover {
+    background: rgba(251, 146, 60, .14);
+    color: #ea580c;
+}
 </style>
 
 <div class="container">
@@ -148,9 +162,18 @@ Family Album
 
                 <div class="album-people">
                     {% for person in photo.people %}
-                        <span class="person-chip">
-                            {{ person.name }}
-                        </span>
+
+                        <form
+                            method="POST"
+                            action="{{ url_for('send_detection_to_review', photo_id=photo.id, member_id=person.id) }}"
+                            class="person-chip-form"
+                            onsubmit="return confirm('Send {{ person.name }} detection back to review?')"
+                        >
+                            <button type="submit" class="person-chip review-chip">
+                                {{ person.name }} ×
+                            </button>
+                        </form>
+
                     {% endfor %}
                 </div>
         </div>

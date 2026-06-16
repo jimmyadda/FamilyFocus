@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Register Family{% endblock %}
+
+{% block content %}
+
+<div class="auth-page">
+    <div class="auth-card">
+        <h1>Create your family account</h1>
+        <p>Start your private Family Focus album.</p>
+
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" class="auth-form">
+            <label>Family name</label>
+            <input type="text" name="family_name" placeholder="Adda" required>
+
+            <label>First name</label>
+            <input type="text" name="first_name">
+
+            <label>Last name</label>
+            <input type="text" name="last_name">
+
+            <label>Email</label>
+            <input type="email" name="email" required>
+
+            <label>Password</label>
+            <input type="password" name="password" required>
+
+            <button type="submit">Create account</button>
+        </form>
+
+        <p class="auth-link">
+            Already have an account?
+            <a href="{{ url_for('login') }}">Login</a>
+        </p>
+    </div>
+</div>
+
+{% endblock %}

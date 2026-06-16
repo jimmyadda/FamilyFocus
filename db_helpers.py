@@ -212,22 +212,45 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+    #Users Tables & Indexes
+    database_write("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            first_name TEXT,
+            last_name TEXT,
+            telegram_chat_id TEXT,
+            telegram_username TEXT,
+            role TEXT DEFAULT 'admin',
+            is_active INTEGER DEFAULT 1,
+            last_login TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (family_id) REFERENCES families(id)
+        )
+    """)
+    database_write("""
+    CREATE INDEX IF NOT EXISTS idx_users_family_id
+    ON users(family_id) 
+    """)
 
     database_write("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                family_id INTEGER NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                telegram_chat_id TEXT,
-                telegram_username TEXT,
-                role TEXT DEFAULT 'admin',
-                is_active INTEGER DEFAULT 1,
-                last_login TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+    CREATE INDEX IF NOT EXISTS idx_users_telegram_chat_id
+    ON users(telegram_chat_id)
+    """)
 
+    database_write("""
+    CREATE TABLE IF NOT EXISTS user_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token TEXT NOT NULL,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
         #Family ID 
 
     add_column_if_missing(
@@ -430,8 +453,8 @@ def assign_existing_data_to_family(family_id):
         WHERE family_id IS NULL
     """, (family_id,))
 
-def get_current_family_id():
-    return 1
+""" def get_current_family_id():
+    return 1 """
 
 def database_read(query, params=()):
     with sqlite3.connect(DB_PATH) as conn:

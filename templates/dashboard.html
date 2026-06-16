@@ -1,0 +1,363 @@
+{% extends "base.html" %}
+
+{% block title %}
+Family Dashboard
+{% endblock %}
+
+{% block content %}
+
+<div class="dashboard-page">
+
+    <section class="dashboard-hero">
+        <div>
+            <span class="dashboard-eyebrow">Family Focus</span>
+            <h1>{{ session.get("family_name", "Family") }} Family</h1>
+            <p>
+                Your private family photo hub — upload, detect, review and organize family memories.
+            </p>
+        </div>
+
+        <a href="{{ url_for('filter_photos_page') }}" class="dashboard-main-btn">
+            Upload Photos
+        </a>
+    </section>
+
+    <section class="dashboard-stats">
+
+        <div class="dashboard-stat-card">
+            <span class="stat-icon">👨‍👩‍👧‍👦</span>
+            <strong>{{ stats.members }}</strong>
+            <small>Family Members</small>
+        </div>
+
+        <div class="dashboard-stat-card">
+            <span class="stat-icon">📸</span>
+            <strong>{{ stats.detected }}</strong>
+            <small>Detected Photos</small>
+        </div>
+
+        <div class="dashboard-stat-card">
+            <span class="stat-icon">✨</span>
+            <strong>{{ stats.possible }}</strong>
+            <small>Possible Matches</small>
+        </div>
+
+    </section>
+
+    <section class="dashboard-section">
+
+        <div class="dashboard-section-header">
+            <div>
+                <h2>Family Members</h2>
+                <p>Open a profile to train faces and view personal albums.</p>
+            </div>
+        </div>
+
+        <div class="dashboard-members-grid">
+
+            {% for member in members %}
+                <a
+                    href="{{ url_for('member_page', member_id=member.id) }}"
+                    class="dashboard-member-card"
+                >
+                    <div class="dashboard-member-avatar">
+                        {{ member.name[:2]|upper }}
+                    </div>
+
+                    <div class="dashboard-member-name">
+                        {{ member.name }}
+                    </div>
+                </a>
+            {% endfor %}
+
+        </div>
+
+    </section>
+
+    <section class="dashboard-section">
+
+        <div class="dashboard-section-header">
+            <div>
+                <h2>Recent Family Photos</h2>
+                <p>Latest confirmed family photos.</p>
+            </div>
+
+            <a href="{{ url_for('family_album') }}" class="dashboard-link">
+                Open Album →
+            </a>
+        </div>
+
+        {% if recent_photos %}
+
+            <div class="dashboard-photo-grid">
+
+                {% for photo in recent_photos %}
+                    {% set filename = photo.file_path.replace('\\', '/').split('/')[-1] %}
+
+                    <a
+                        href="{{ url_for('family_album') }}"
+                        class="dashboard-photo-card"
+                    >
+                        <img
+                            src="{{ url_for('serve_result_file', filename=filename) }}"
+                            alt="Family photo"
+                        >
+                    </a>
+                {% endfor %}
+
+            </div>
+
+        {% else %}
+
+            <div class="dashboard-empty">
+                <h3>No detected photos yet</h3>
+                <p>Upload photos and Family Focus will start building your album.</p>
+
+                <a href="{{ url_for('filter_photos_page') }}" class="dashboard-main-btn">
+                    Upload Your First Photos
+                </a>
+            </div>
+
+        {% endif %}
+
+    </section>
+
+</div>
+
+<style>
+.dashboard-page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px;
+}
+
+.dashboard-hero {
+    background: linear-gradient(135deg, #fff7ed, #ccfbf1);
+    border: 1px solid rgba(251, 146, 60, .25);
+    border-radius: 32px;
+    padding: 32px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+
+    margin-bottom: 24px;
+}
+
+.dashboard-eyebrow {
+    color: #ea580c;
+    font-size: 13px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+}
+
+.dashboard-hero h1 {
+    margin: 8px 0;
+    font-size: clamp(32px, 5vw, 52px);
+    color: #1e293b;
+}
+
+.dashboard-hero p {
+    margin: 0;
+    color: #64748b;
+    max-width: 560px;
+    font-weight: 600;
+}
+
+.dashboard-main-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 13px 20px;
+    border-radius: 999px;
+
+    background: linear-gradient(135deg, #fb923c, #2dd4bf);
+    color: white;
+
+    font-weight: 900;
+    text-decoration: none;
+
+    box-shadow: 0 12px 24px rgba(251, 146, 60, .18);
+    white-space: nowrap;
+}
+
+.dashboard-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-bottom: 24px;
+}
+
+.dashboard-stat-card {
+    background: white;
+    border-radius: 24px;
+    padding: 22px;
+
+    box-shadow: 0 10px 26px rgba(15, 23, 42, .06);
+    border: 1px solid #f1f5f9;
+}
+
+.dashboard-stat-card .stat-icon {
+    display: block;
+    font-size: 26px;
+    margin-bottom: 10px;
+}
+
+.dashboard-stat-card strong {
+    display: block;
+    font-size: 34px;
+    color: #1e293b;
+    line-height: 1;
+}
+
+.dashboard-stat-card small {
+    display: block;
+    margin-top: 8px;
+    color: #64748b;
+    font-weight: 800;
+}
+
+.dashboard-section {
+    background: white;
+    border-radius: 28px;
+    padding: 24px;
+    margin-bottom: 24px;
+
+    box-shadow: 0 10px 26px rgba(15, 23, 42, .06);
+    border: 1px solid #f1f5f9;
+}
+
+.dashboard-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.dashboard-section-header h2 {
+    margin: 0 0 4px;
+    color: #1e293b;
+}
+
+.dashboard-section-header p {
+    margin: 0;
+    color: #64748b;
+    font-weight: 600;
+}
+
+.dashboard-link {
+    color: #ea580c;
+    font-weight: 900;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.dashboard-members-grid {
+    display: flex;
+    gap: 16px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+}
+
+.dashboard-member-card {
+    flex: 0 0 auto;
+    text-align: center;
+    text-decoration: none;
+}
+
+.dashboard-member-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 24px;
+
+    background: linear-gradient(135deg, #fb923c, #2dd4bf);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    color: white;
+    font-size: 28px;
+    font-weight: 900;
+}
+
+.dashboard-member-name {
+    margin-top: 8px;
+    color: #64748b;
+    font-weight: 800;
+    font-size: 14px;
+}
+
+.dashboard-photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(135px, 1fr));
+    gap: 12px;
+}
+
+.dashboard-photo-card {
+    border-radius: 18px;
+    overflow: hidden;
+    background: #f8fafc;
+    display: block;
+}
+
+.dashboard-photo-card img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    display: block;
+}
+
+.dashboard-empty {
+    text-align: center;
+    padding: 36px 18px;
+    border-radius: 24px;
+    background: #fff7ed;
+    border: 2px dashed #fed7aa;
+}
+
+.dashboard-empty h3 {
+    margin-top: 0;
+    color: #1e293b;
+}
+
+.dashboard-empty p {
+    color: #64748b;
+    font-weight: 600;
+}
+
+@media (max-width: 760px) {
+    .dashboard-page {
+        padding: 16px;
+    }
+
+    .dashboard-hero {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 24px;
+    }
+
+    .dashboard-main-btn {
+        width: 100%;
+    }
+
+    .dashboard-stats {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard-section-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .dashboard-photo-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+</style>
+
+{% endblock %}

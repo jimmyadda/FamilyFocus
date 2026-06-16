@@ -21,7 +21,8 @@ from flask import (
     get_flashed_messages
 )
 from werkzeug.utils import secure_filename
-
+from werkzeug.security import generate_password_hash, check_password_hash
+from auth import login_required, get_current_family_id
 try:
     from deepface import DeepFace
 except ImportError:
@@ -51,7 +52,7 @@ from face_utils import (
 
 
 app = Flask(__name__)
-app.secret_key = "family-focus-dev-secret-key"
+app.secret_key = "vsbvrbdbdbdbXCVvsvvsv156156VVVgrgergerg"  # Change this to a random secret key in production
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
 for folder in [
@@ -309,7 +310,6 @@ def get_all_members():
         ORDER BY fm.name
     """, (family_id,))
 
-
 def get_member(member_id):
     family_id = get_current_family_id()
 
@@ -434,24 +434,179 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     return True
 
 
+# -------------------------
+# User Login and Registration
+# -------------------------
 
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        family_name = request.form.get("family_name", "").strip()
+        first_name = request.form.get("first_name", "").strip()
+        last_name = request.form.get("last_name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "").strip()
+        client_id = family_name.lower().replace(" ", "_")   
+
+        if not family_name or not email or not password:
+            flash("Family name, email and password are required.")
+            return redirect(url_for("register"))
+
+        existing = database_read(
+            "SELECT id FROM users WHERE email = ?",
+            (email,)
+        )
+
+        if existing:
+            flash("Email already exists. Please log in.")
+            return redirect(url_for("login"))
+        
+        database_write("""
+            INSERT INTO families (
+                family_name,
+                client_id
+            )
+            VALUES (?, ?)
+        """, (
+            family_name,
+            client_id
+        ))
+
+        family_id = database_read("SELECT last_insert_rowid() AS id")[0]["id"]
+
+        password_hash = generate_password_hash(password)
+        client_id = family_name.lower().replace(" ", "_")
+        
+        database_write("""
+            INSERT INTO users (
+                family_id,
+                email,
+                password_hash,
+                first_name,
+                last_name,
+                role
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            family_id,
+            email,
+            password_hash,
+            first_name,
+            last_name,
+            "admin"
+        ))
+
+        user_id = database_read("SELECT last_insert_rowid() AS id")[0]["id"]
+
+        session["user_id"] = user_id
+        session["family_id"] = family_id
+        session["email"] = email
+        session["first_name"] = first_name
+        session["family_name"] = family_name
+
+        flash("Family account created.")
+        return redirect(url_for("dashboard"))
+
+    return render_template("register.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "").strip()
+
+        user_rows = database_read("""
+            SELECT users.*, families.family_name
+            FROM users
+            JOIN families ON families.id = users.family_id
+            WHERE users.email = ?
+            AND users.is_active = 1
+        """, (email,))
+
+        if not user_rows:
+            flash("Invalid email or password.")
+            return redirect(url_for("login"))
+
+        user = user_rows[0]
+
+        if not check_password_hash(user["password_hash"], password):
+            flash("Invalid email or password.")
+            return redirect(url_for("login"))
+
+        session["user_id"] = user["id"]
+        session["family_id"] = user["family_id"]
+        session["email"] = user["email"]
+        session["first_name"] = user["first_name"]
+        session["family_name"] = user["family_name"]
+
+        database_write(
+            "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
+            (user["id"],)
+        )
+
+        flash("Logged in successfully.")
+        return redirect(url_for("dashboard"))
+
+    return render_template("login.html")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    flash("Logged out.")
+    return redirect(url_for("login"))    
 # -------------------------
 # Main pages
 # -------------------------
 @app.route("/")
+@login_required
 def home():
-    members = get_all_members()
+    family_id = get_current_family_id()
 
-    for member in members:
-        print(
-            member["name"],
-            "->",
-            member.get("profile_photo")
-        )
+    stats = {
+        "members": database_read("""
+            SELECT COUNT(*) AS count
+            FROM family_members
+            WHERE family_id = ?
+        """, (family_id,))[0]["count"],
+
+        "detected": database_read("""
+            SELECT COUNT(DISTINCT photo_id) AS count
+            FROM photo_detections
+            WHERE family_id = ?
+            AND status = 'confirmed'
+        """, (family_id,))[0]["count"],
+
+        "possible": database_read("""
+            SELECT COUNT(*) AS count
+            FROM photo_detections
+            WHERE family_id = ?
+            AND status = 'possible'
+        """, (family_id,))[0]["count"],
+    }
+
+    members = database_read("""
+        SELECT *
+        FROM family_members
+        WHERE family_id = ?
+        ORDER BY name
+    """, (family_id,))
+
+    recent_photos = database_read("""
+        SELECT DISTINCT fp.*
+        FROM family_photos fp
+        JOIN photo_detections pd ON pd.photo_id = fp.id
+        WHERE fp.family_id = ?
+        AND pd.family_id = ?
+        AND pd.status = 'confirmed'
+        ORDER BY fp.created_at DESC
+        LIMIT 8
+    """, (family_id, family_id))
 
     return render_template(
-        "index.html",
-        members=members
+        "dashboard.html",
+        stats=stats,
+        members=members,
+        recent_photos=recent_photos
     )
 
 
@@ -476,6 +631,7 @@ def create_member():
 
 @app.route("/members/<int:member_id>")
 @app.route("/member/<int:member_id>")
+@login_required
 def member_page(member_id):
     family_id = get_current_family_id()
 
@@ -527,6 +683,7 @@ def member_page(member_id):
 # album - new focus
 
 @app.route("/album")
+@login_required
 def family_album():
     family_id = get_current_family_id()
 
@@ -556,6 +713,7 @@ def family_album():
     )
 
 @app.route("/member/<int:member_id>/album")
+@login_required
 def member_album(member_id):
     family_id = get_current_family_id()
 
@@ -582,6 +740,7 @@ def member_album(member_id):
     )
 
 @app.route("/detections/<int:detection_id>/confirm", methods=["POST"])
+@login_required
 def confirm_detection(detection_id):
     family_id = get_current_family_id()
 
@@ -613,6 +772,7 @@ def confirm_detection(detection_id):
 
 
 @app.route("/detections/<int:detection_id>/reject", methods=["POST"])
+@login_required
 def reject_detection(detection_id):
     family_id = get_current_family_id()
 
@@ -633,6 +793,7 @@ def reject_detection(detection_id):
 
 @app.route("/member/<int:member_id>/upload", methods=["POST"])
 @app.route("/members/<int:member_id>/upload", methods=["POST"])
+@login_required
 def upload_member_photos(member_id):
     print("UPLOAD ROUTE HIT")
     print("CONTENT LENGTH:", request.content_length)
@@ -701,6 +862,7 @@ def upload_member_photos(member_id):
 
 
 @app.route("/member-photo/<int:photo_id>/delete", methods=["POST"])
+@login_required
 def delete_member_photo(photo_id):
 
     photo = database_read(
@@ -744,6 +906,7 @@ def delete_member_photo(photo_id):
     return redirect(request.referrer)
 
 @app.route("/profile-file/<int:member_id>/<filename>")
+@login_required
 def serve_profile_file(member_id, filename):
     folder = PROFILE_UPLOAD_DIR / str(member_id)
     return send_from_directory(folder, filename)
@@ -760,6 +923,7 @@ def too_large(e):
 # -------------------------
 
 @app.route("/member/<int:member_id>/rebuild-embeddings", methods=["POST"])
+@login_required
 def rebuild_embeddings(member_id):
     family_id = get_current_family_id()
 
@@ -851,6 +1015,7 @@ def rebuild_embeddings(member_id):
 # -------------------------
 
 @app.route("/camera")
+@login_required
 def camera():
     return render_template(
         "camera.html",
@@ -858,6 +1023,7 @@ def camera():
     )
 
 @app.route("/api/recognize-frame", methods=["POST"])
+@login_required
 def recognize_frame():
     if DeepFace is None:
         return jsonify({
@@ -975,10 +1141,12 @@ def family_file(filename):
 
 
 @app.route("/filter-photos")
+@login_required
 def filter_photos_page():
     return render_template("filter_photos.html")
 
 @app.route("/filter-photos", methods=["POST"])
+@login_required
 def filter_photos_upload():
     files = request.files.getlist("photos")
 
@@ -1152,10 +1320,12 @@ def filter_photos_upload():
     )
 
 @app.route("/results/<filename>")
+@login_required
 def serve_result_file(filename):
     return send_from_directory(RESULTS_UPLOAD_DIR, filename)
 
 @app.route("/serve-skipped/<path:filename>")
+@login_required
 def serve_skipped_file(filename):
     filename = filename.replace("skipped/", "")
 
@@ -1165,10 +1335,12 @@ def serve_skipped_file(filename):
     )
     
 @app.route("/possible/<filename>")
+@login_required
 def serve_possible_file(filename):
     return send_from_directory(POSSIBLE_UPLOAD_DIR, filename)
 
 @app.route("/review-possible/<filename>/<action>")
+@login_required
 def review_possible_photo(filename, action):
     member_name = request.args.get("member_name")
     face_crop = request.args.get("face_crop")
@@ -1264,7 +1436,9 @@ def review_possible_photo(filename, action):
     return redirect(url_for("filter_photos_page"))
 
 # Fix detections mistakenly marked skipped
+
 @app.route("/review")
+@login_required
 def review_page():
     family_id = get_current_family_id()
 
@@ -1308,13 +1482,32 @@ def review_page():
 
         photos[key]["faces"].append(item)
 
+    album_review_items = database_read("""
+        SELECT
+            pd.id AS detection_id,
+            pd.photo_id,
+            pd.member_id,
+            pd.distance,
+            fp.file_path,
+            fp.original_filename,
+            fm.name AS member_name
+        FROM photo_detections pd
+        JOIN family_photos fp ON fp.id = pd.photo_id
+        LEFT JOIN family_members fm ON fm.id = pd.member_id
+        WHERE pd.family_id = ?
+          AND pd.status = 'possible'
+        ORDER BY pd.created_at DESC
+    """, (family_id,))
+
     return render_template(
         "review.html",
         members=members,
-        review_photos=list(photos.values())
+        review_photos=list(photos.values()),
+        album_review_items=album_review_items
     )
 
 @app.route("/review-face/<int:review_id>", methods=["POST"])
+@login_required
 def review_face(review_id):
     family_id = get_current_family_id()
     reviewed_member_id = request.form.get("member_id", type=int)
@@ -1414,6 +1607,52 @@ def rescan_skipped():
 
     flash(f"Rescanned skipped photos. Found {count} new matches.")
     return redirect(url_for("review_page"))
+
+@app.route("/album/photo/<int:photo_id>/member/<int:member_id>/review", methods=["POST"])
+@login_required
+def send_detection_to_review(photo_id, member_id):
+    family_id = get_current_family_id()
+
+    database_write(
+        """
+        UPDATE photo_detections
+        SET status = 'possible',
+            confirmed_by_user = 0
+        WHERE family_id = ?
+          AND photo_id = ?
+          AND member_id = ?
+          AND status = 'confirmed'
+        """,
+        (family_id, photo_id, member_id)
+    )
+
+    flash("Detection sent back to review.")
+
+    return redirect(request.referrer or url_for("family_album"))
+
+@app.route("/album-file/<int:photo_id>")
+def serve_album_file(photo_id):
+    family_id = get_current_family_id()
+
+    rows = database_read(
+        """
+        SELECT file_path
+        FROM family_photos
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (photo_id, family_id)
+    )
+
+    if not rows:
+        return "File not found", 404
+
+    file_path = Path(rows[0]["file_path"])
+
+    return send_from_directory(file_path.parent, file_path.name)
+
+
+
 
 # -------------------------
 # Run app
