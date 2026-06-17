@@ -7,7 +7,6 @@ Review Faces
 {% block content %}
 
 <style>
-
 .review-page{
     max-width:1200px;
     margin:auto;
@@ -64,7 +63,16 @@ Review Faces
     position:absolute;
     border:3px solid #fb923c;
     border-radius:12px;
-    pointer-events:none;
+    background:rgba(255,255,255,.08);
+    cursor:pointer;
+    z-index:5;
+    pointer-events:auto;
+}
+
+.face-box.selected{
+    border-color:#10b981;
+    background:rgba(16,185,129,.18);
+    box-shadow:0 0 0 4px rgba(16,185,129,.25);
 }
 
 .review-status{
@@ -96,25 +104,15 @@ Review Faces
     font-weight:700;
 }
 
-.empty-review{
+.empty-review,
+.empty-state{
     text-align:center;
     padding:50px;
     color:#64748b;
 }
-.face-box{
-    position:absolute;
-    border:3px solid #fb923c;
-    border-radius:12px;
-    background:rgba(255,255,255,.08);
-    cursor:pointer;
-    z-index:5;
-    pointer-events:auto;
-}
 
-.face-box.selected{
-    border-color:#10b981;
-    background:rgba(16,185,129,.18);
-    box-shadow:0 0 0 4px rgba(16,185,129,.25);
+.review-section{
+    margin-top:34px;
 }
 
 .album-review-grid {
@@ -131,6 +129,10 @@ Review Faces
     box-shadow: 0 6px 18px rgba(0,0,0,.08);
 }
 
+.album-image-wrap {
+    position: relative;
+}
+
 .album-review-card img {
     width: 100%;
     height: 220px;
@@ -142,10 +144,43 @@ Review Faces
     padding: 12px;
 }
 
+.album-review-info strong,
+.album-review-info small {
+    display:block;
+}
+
 .album-review-actions {
     display: flex;
     gap: 8px;
     padding: 0 12px 12px;
+}
+
+.review-delete-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    width: 38px;
+    height: 38px;
+    border: none;
+    border-radius: 999px;
+
+    background: rgba(220, 38, 38, .95);
+    color: white;
+
+    font-size: 18px;
+    font-weight: 900;
+    cursor: pointer;
+
+    box-shadow: 0 6px 16px rgba(0,0,0,.25);
+}
+
+.review-delete-btn:hover {
+    background: #b91c1c;
+    transform: scale(1.06);
 }
 </style>
 
@@ -161,171 +196,246 @@ Review Faces
         </a>
     </div>
 
-    {% if not review_photos %}
+    {% if review_photos %}
 
-        <div class="empty-review">
-            No faces waiting for review.
-        </div>
+        <div class="review-grid">
 
-    {% else %}
+            {% for photo in review_photos %}
+            <div class="review-card">
 
-    <div class="review-grid">
+                <div class="review-image-wrap">
+                    <img src="{{ url_for('serve_skipped_file', filename=photo.photo_path.replace('skipped/', '')) }}">
 
-        {% for photo in review_photos %}
-        <div class="review-card">
-
-            <div class="review-image-wrap">
-                <img src="{{ url_for('serve_skipped_file', filename=photo.photo_path.replace('skipped/', '')) }}">
-
-                {% for face in photo.faces %}
-                    {% if face.box_x_percent != None %}
                     <button
                         type="button"
-                        class="face-box"
-                        data-review-id="{{ face.id }}"
-                        style="left:{{ face.box_x_percent }}%;
-                            top:{{ face.box_y_percent }}%;
-                            width:{{ face.box_w_percent }}%;
-                            height:{{ face.box_h_percent }}%;">
+                        class="review-delete-btn"
+                        onclick="deleteLearningReviewCard(event, this)"
+                        title="Delete photo">
+                        🗑
                     </button>
-                    {% endif %}
-                {% endfor %}
-            </div>
 
-            <form class="review-form" method="POST">
-                <input type="hidden" name="selected_review_id" class="selected-review-id">
-
-                <select name="member_id" required>
-                    <option value="">Select family member</option>
-                    {% for member in members %}
-                    <option value="{{ member.id }}">{{ member.name }}</option>
-                    {% endfor %}
-                </select>
-
-                <button type="submit">Save</button>
-            </form>
-
-        </div>
-        {% endfor %}
-
-    </div>
-{% if album_review_items %}
-
-<section class="review-section">
-
-    <h2>Album Photos Sent to Review</h2>
-
-    <div class="album-review-grid">
-       
-        {% for item in album_review_items %}
-          
-            <div class="album-review-card"
-            id="review-card-{{ item.detection_id }}"
-            >
-
-                <img
-                    src="{{ url_for('serve_album_file', photo_id=item.photo_id) }}"
-                    alt="Review photo"
-                >
-
-                <div class="album-review-info">
-                    <strong>Possible: {{ item.member_name }}</strong>
-
-                    {% if item.distance %}
-                        <small>Distance: {{ "%.3f"|format(item.distance) }}</small>
-                    {% endif %}
-                </div>
-
-                <div class="album-review-actions">
-
-                    <form
-                        method="POST"
-                        action="{{ url_for('confirm_detection', detection_id=item.detection_id) }}"
-                    >
-                        <button type="submit" class="yes-btn">
-                            Yes, keep
+                    {% for face in photo.faces %}
+                        {% if face.box_x_percent != None %}
+                        <button
+                            type="button"
+                            class="face-box"
+                            data-review-id="{{ face.id }}"
+                            style="left:{{ face.box_x_percent }}%;
+                                top:{{ face.box_y_percent }}%;
+                                width:{{ face.box_w_percent }}%;
+                                height:{{ face.box_h_percent }}%;">
                         </button>
-                    </form>
-
-                    <form
-                        method="POST"
-                        action="{{ url_for('reject_detection', detection_id=item.detection_id) }}"
-                    >
-                    <button
-                        type="button"
-                        onclick="rejectDetection({{ item.detection_id }})"
-                        class="no-btn"
-                    >
-                        No
-                    </button>
-                    </form>
-
+                        {% endif %}
+                    {% endfor %}
                 </div>
 
+                <form class="review-form" method="POST">
+                    <input type="hidden" name="selected_review_id" class="selected-review-id">
+
+                    <select name="member_id" required>
+                        <option value="">Select family member</option>
+                        {% for member in members %}
+                        <option value="{{ member.id }}">{{ member.name }}</option>
+                        {% endfor %}
+                    </select>
+
+                    <button type="submit">Save</button>
+                </form>
+
             </div>
+            {% endfor %}
 
-        {% endfor %}
+        </div>
 
-    </div>
-
-</section>
-
-{% endif %}
     {% endif %}
 
+    {% if album_review_items %}
+
+        <section class="review-section">
+
+            <h2>Album Photos Sent to Review</h2>
+
+            <div class="album-review-grid">
+
+                {% for item in album_review_items %}
+
+                    <div
+                        class="album-review-card"
+                        id="review-card-{{ item.detection_id }}">
+
+                        <div class="album-image-wrap">
+                            <img
+                                src="{{ url_for('serve_album_file', photo_id=item.photo_id) }}"
+                                alt="Review photo">
+
+                            <button
+                                type="button"
+                                class="review-delete-btn"
+                                data-photo-path="{{ photo.photo_path }}"
+                                onclick="deleteLearningReviewCard(event, this)"
+                                title="Delete photo">
+                                🗑
+                            </button>
+                        </div>
+
+                        <div class="album-review-info">
+                            <strong>Possible: {{ item.member_name }}</strong>
+
+                            {% if item.distance %}
+                                <small>Distance: {{ "%.3f"|format(item.distance) }}</small>
+                            {% endif %}
+                        </div>
+
+                        <div class="album-review-actions">
+
+                            <form
+                                method="POST"
+                                action="{{ url_for('confirm_detection', detection_id=item.detection_id) }}">
+                                <button type="submit" class="yes-btn">
+                                    Yes, keep
+                                </button>
+                            </form>
+
+                            <button
+                                type="button"
+                                onclick="rejectDetection({{ item.detection_id }})"
+                                class="no-btn">
+                                No
+                            </button>
+
+                        </div>
+
+                    </div>
+
+                {% endfor %}
+
+            </div>
+
+        </section>
+
+    {% endif %}
 
     {% if not review_photos and not album_review_items %}
-    <div class="empty-state">
-        <h2>No photos waiting for review</h2>
-        <p>Everything is clean for now.</p>
-    </div>
-{% endif %}
+        <div class="empty-state">
+            <h2>No photos waiting for review</h2>
+            <p>Everything is clean for now.</p>
+        </div>
+    {% endif %}
 
 </div>
 
-
 <script>
-    document.querySelectorAll(".review-card").forEach(card => {
-        const form = card.querySelector(".review-form");
-        const hidden = card.querySelector(".selected-review-id");
+document.querySelectorAll(".review-card").forEach(card => {
+    const form = card.querySelector(".review-form");
+    const hidden = card.querySelector(".selected-review-id");
 
-        card.querySelectorAll(".face-box").forEach(box => {
-            box.addEventListener("click", () => {
-                console.log("Clicked box with review ID:", box.dataset.reviewId);
-                card.querySelectorAll(".face-box").forEach(b => b.classList.remove("selected"));
-                box.classList.add("selected");
-                hidden.value = box.dataset.reviewId;
-                form.action = `/review-face/${box.dataset.reviewId}`;
+    if (!form || !hidden) return;
+
+    card.querySelectorAll(".face-box").forEach(box => {
+        box.addEventListener("click", e => {
+            e.stopPropagation();
+
+            card.querySelectorAll(".face-box").forEach(b => {
+                b.classList.remove("selected");
             });
-        });
 
-        form.addEventListener("submit", e => {
-            if (!hidden.value) {
-                e.preventDefault();
-                alert("Click a face first.");
-            }
+            box.classList.add("selected");
+            hidden.value = box.dataset.reviewId;
+            form.action = `/review-face/${box.dataset.reviewId}`;
         });
     });
 
-    function rejectDetection(detectionId) {
+    form.addEventListener("submit", e => {
+        if (!hidden.value) {
+            e.preventDefault();
+            alert("Click a face first.");
+        }
+    });
+});
 
-        fetch(`/detections/${detectionId}/reject`, {
-            method: "POST"
-        })
-        .then(response => response.json())
-        .then(data => {
 
-            if (data.success) {
+ function rejectDetection(detectionId) {
+    fetch(`/detections/${detectionId}/reject`, {
+        method: "POST"
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const card = document.getElementById(
+                `review-card-${detectionId}`
+            );
 
-                const card = document.getElementById(
-                    `review-card-${detectionId}`
-                );
-
-                if (card) {
-                    card.remove();
-                }
+            if (card) {
+                card.remove();
             }
-        });
+        }
+    });
+}
+
+ function deleteAlbumReviewItem(detectionId) {
+    if (!confirm("Delete this item from review?")) {
+        return;
     }
+
+    rejectDetection(detectionId);
+}
+
+function deleteLearningReviewCard(event, btn) {
+    if (!confirm("Delete this photo from review?")) {
+        return;
+    }
+
+    const card = btn.closest(".review-card");
+
+    const reviewIds = Array.from(
+        card.querySelectorAll(".face-box")
+    ).map(box => box.dataset.reviewId);
+
+    if (!reviewIds.length) {
+        alert("No review IDs found.");
+        return;
+    }
+
+    fetch("/review/delete-learning-card", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            review_ids: reviewIds
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            card.remove();
+        } else {
+            alert(data.message || "Delete failed");
+        }
+    })
+    .catch(error => {
+        console.error(error);
+        alert("Delete failed");
+    });
+}
+
+document.querySelectorAll(".photo-delete-btn, .delete-photo-form").forEach(el => {
+    el.addEventListener("click", e => {
+        e.stopPropagation();
+    });
+});
+
+document.querySelectorAll(".delete-photo-form").forEach(form => {
+    form.addEventListener("submit", e => {
+        e.stopPropagation();
+
+        if (!confirm("Delete this photo from review?")) {
+            e.preventDefault();
+        }
+    });
+});
+
+
 </script>
+
 {% endblock %}

@@ -4,12 +4,11 @@ import shutil
 import sqlite3
 import uuid
 from pathlib import Path
-
 import cv2
 from db_helpers import *
-
 import numpy as np
 from flask import (
+    abort, send_file,
     Flask,
     flash,
     jsonify,
@@ -18,7 +17,8 @@ from flask import (
     request,
     send_from_directory,
     url_for,
-    get_flashed_messages
+    get_flashed_messages,
+    session
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -29,17 +29,16 @@ except ImportError:
     DeepFace = None
 
 from config import (
-    BASE_CLIENT_DIR,
     DB_PATH,
     PHOTO_POSSIBLE_THRESHOLD,
-    PROFILE_UPLOAD_DIR,
-    INCOMING_UPLOAD_DIR,
-    RESULTS_UPLOAD_DIR,
     MIN_FACE_SIZE_CAMERA,
     MIN_FACE_SIZE_IMAGE,
+    TEMP_DIR,
     TEMP_UPLOAD_DIR,
-    PHOTO_MATCH_THRESHOLD, 
+    PHOTO_MATCH_THRESHOLD,
     CAMERA_MATCH_THRESHOLD,
+    MAX_CONTENT_LENGTH,
+    
 )
 
 from face_utils import (
@@ -49,36 +48,37 @@ from face_utils import (
     create_annotated_family_image,
     represent_face,
 )
+from dotenv import load_dotenv
+import os
 
+from db_helpers import (
+    get_family_profiles_dir,
+    get_incoming_upload_dir,
+    get_family_results_dir,
+    get_family_possible_dir,
+    get_family_possible_faces_dir,
+    get_family_skipped_dir,
+    ensure_family_dirs,
+    ensure_app_dirs,
+)
+
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = "vsbvrbdbdbdbXCVvsvvsv156156VVVgrgergerg"  # Change this to a random secret key in production
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
-for folder in [
-    BASE_CLIENT_DIR,
-    PROFILE_UPLOAD_DIR,
-    INCOMING_UPLOAD_DIR,
-    RESULTS_UPLOAD_DIR,
-    TEMP_UPLOAD_DIR,
-]:
-    folder.mkdir(parents=True, exist_ok=True)
-
-POSSIBLE_UPLOAD_DIR = BASE_CLIENT_DIR / "possible"
-POSSIBLE_FACES_DIR = BASE_CLIENT_DIR / "possible_faces"
-
-POSSIBLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)    
-SKIPPED_UPLOAD_DIR = BASE_CLIENT_DIR / "skipped"
-SKIPPED_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# Folder creation
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+ensure_app_dirs()
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
+EMBEDDING_ENCRYPTION_KEY = os.getenv(
+    "EMBEDDING_ENCRYPTION_KEY"
+)
 
-TEMP_DIR = Path(DB_PATH).parent / "temp"
-TEMP_DIR.mkdir(parents=True, exist_ok=True)
-
-
-
-
+CLIENT_ID = os.getenv("CLIENT_ID", "adda")
 
 # -------------------------
 # General helpers
@@ -89,7 +89,6 @@ def allowed_file(filename):
         "." in filename
         and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
     )
-
 
 def decode_base64_to_temp_file(data_url):
     if "," in data_url:
@@ -112,7 +111,6 @@ def decode_base64_to_temp_file(data_url):
     cv2.imwrite(str(temp_path), bgr)
 
     return temp_path
-
 
 def get_all_family_embeddings():
     family_id = get_current_family_id()
@@ -145,7 +143,8 @@ def get_all_family_embeddings():
 
 def image_contains_known_family(image_path, family_embeddings, DeepFace):
     image = cv2.imread(str(image_path))
-
+    family_id = get_current_family_id()
+    possible_facedir = get_family_possible_faces_dir(family_id)
     if image is None:
         print("Could not read image:", image_path)
         return False, [], [], [], []
@@ -238,7 +237,7 @@ def image_contains_known_family(image_path, family_embeddings, DeepFace):
 
         if status == "possible":
             face_crop_filename = f"{Path(image_path).stem}_face_{i}.jpg"
-            face_crop_path = POSSIBLE_FACES_DIR / face_crop_filename
+            face_crop_path = possible_facedir / face_crop_filename
             cv2.imwrite(str(face_crop_path), face_crop)
 
         match = {
@@ -359,7 +358,7 @@ def get_member_id_by_name(name, family_id):
 def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     member = get_member_by_name(member_name)
     family_id = get_current_family_id()
-
+    profiles_dir = get_family_profiles_dir(family_id)
     if not member:
         print("Member not found:", member_name)
         return False
@@ -393,7 +392,7 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
         print("Learning rejected - face too far from profile")
         return False
 
-    member_profile_dir = PROFILE_UPLOAD_DIR / str(member_id)
+    member_profile_dir = profiles_dir / str(member_id)
     member_profile_dir.mkdir(parents=True, exist_ok=True)
 
     ext = Path(face_crop_path).suffix.lower()
@@ -505,7 +504,7 @@ def register():
         session["family_name"] = family_name
 
         flash("Family account created.")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("home"))
 
     return render_template("register.html")
 
@@ -545,15 +544,22 @@ def login():
         )
 
         flash("Logged in successfully.")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("home"))
 
     return render_template("login.html")
 
 @app.route("/logout")
 def logout():
+    session_token = session.get("session_token")
+    if session_token:
+        database_write(
+            "DELETE FROM user_sessions WHERE token = ?",
+            (session_token,)
+        )
     session.clear()
-    flash("Logged out.")
+    flash("You have been logged out.", "success")
     return redirect(url_for("login"))    
+
 # -------------------------
 # Main pages
 # -------------------------
@@ -797,7 +803,8 @@ def reject_detection(detection_id):
 def upload_member_photos(member_id):
     print("UPLOAD ROUTE HIT")
     print("CONTENT LENGTH:", request.content_length)
-
+    family_id = get_current_family_id()
+    profile_dir = get_family_profiles_dir(family_id)
     try:
         files = request.files.getlist("photos")
         print("FILES RECEIVED:", len(files))
@@ -822,7 +829,7 @@ def upload_member_photos(member_id):
         flash("No photos selected.")
         return redirect(url_for("member_page", member_id=member_id))
 
-    member_dir = PROFILE_UPLOAD_DIR / str(member_id)
+    member_dir = profile_dir / str(member_id)
     member_dir.mkdir(parents=True, exist_ok=True)
 
     saved = 0
@@ -908,7 +915,9 @@ def delete_member_photo(photo_id):
 @app.route("/profile-file/<int:member_id>/<filename>")
 @login_required
 def serve_profile_file(member_id, filename):
-    folder = PROFILE_UPLOAD_DIR / str(member_id)
+    family_id = get_current_family_id()
+    profile_dir = get_family_profiles_dir(family_id)
+    folder = profile_dir / str(member_id)
     return send_from_directory(folder, filename)
 
 @app.errorhandler(413)
@@ -926,7 +935,7 @@ def too_large(e):
 @login_required
 def rebuild_embeddings(member_id):
     family_id = get_current_family_id()
-
+    profile_dir = get_family_profiles_dir(family_id)
     if DeepFace is None:
         flash("DeepFace is not installed.")
         return redirect(url_for("member_page", member_id=member_id))
@@ -962,7 +971,7 @@ def rebuild_embeddings(member_id):
         photo_path = Path(photo["file_path"])
         
         if not photo_path.exists():
-            photo_path = PROFILE_UPLOAD_DIR / str(member_id) / Path(photo["file_path"]).name
+            photo_path = profile_dir / str(member_id) / Path(photo["file_path"]).name
 
 
         if not photo_path.exists():
@@ -1134,10 +1143,14 @@ def recognize_frame():
 @app.route("/family-file/<path:filename>")
 def family_file(filename):
     family_id = get_current_family_id()
+    base_dir = get_family_base_dir(family_id).resolve()
+    file_path = (base_dir / filename).resolve()
+    if base_dir not in file_path.parents and file_path != base_dir:
+        abort(403)
+    if not file_path.exists():
+        abort(404)
 
-    base_dir = INSTANCE_DIR / str(family_id)
-
-    return send_from_directory(base_dir, filename)
+    return send_file(file_path)
 
 
 @app.route("/filter-photos")
@@ -1159,6 +1172,9 @@ def filter_photos_upload():
     skipped = 0
 
     family_id = get_current_family_id()
+    possible_faces_dir = get_family_possible_dir(family_id)
+    skipped_dir = get_family_skipped_dir(family_id)
+    incoming_dir = get_incoming_upload_dir(family_id)
 
     family_embeddings = get_all_family_embeddings()
     print("FAMILY EMBEDDINGS LOADED:", len(family_embeddings))
@@ -1175,7 +1191,7 @@ def filter_photos_upload():
         ext = original.rsplit(".", 1)[1].lower()
         filename = f"{uuid.uuid4()}.{ext}"
 
-        incoming_path = INCOMING_UPLOAD_DIR / filename
+        incoming_path = incoming_dir / filename
         file.save(incoming_path)
 
         found, matched_names, matches, possible_names, possible_matches = image_contains_known_family(
@@ -1185,7 +1201,11 @@ def filter_photos_upload():
         )
 
         if found:
-            result_path = RESULTS_UPLOAD_DIR / filename
+            family_id = get_current_family_id()
+            results_dir = get_family_results_dir(family_id)
+
+            result_path = results_dir / filename
+            #result_path = RESULTS_UPLOAD_DIR / filename
 
             create_annotated_family_image(
                 incoming_path,
@@ -1232,7 +1252,7 @@ def filter_photos_upload():
                 pass
 
         elif possible_matches:
-            possible_path = POSSIBLE_UPLOAD_DIR / filename
+            possible_path = possible_faces_dir / filename
 
             create_annotated_family_image(
                 incoming_path,
@@ -1279,7 +1299,7 @@ def filter_photos_upload():
                 pass
 
         else:
-            skipped_path = SKIPPED_UPLOAD_DIR / filename
+            skipped_path = skipped_dir / filename
             shutil.copy(str(incoming_path), str(skipped_path))
 
             unknown_faces = extract_faces_for_review(
@@ -1322,22 +1342,28 @@ def filter_photos_upload():
 @app.route("/results/<filename>")
 @login_required
 def serve_result_file(filename):
-    return send_from_directory(RESULTS_UPLOAD_DIR, filename)
+    family_id = get_current_family_id()
+    results_dir = get_family_results_dir(family_id)
+    return send_from_directory(results_dir, filename)
 
 @app.route("/serve-skipped/<path:filename>")
 @login_required
 def serve_skipped_file(filename):
+    family_id = get_current_family_id()
+    skipped_dir = get_family_skipped_dir(family_id)
     filename = filename.replace("skipped/", "")
 
     return send_from_directory(
-        SKIPPED_UPLOAD_DIR,
+        skipped_dir,
         filename
     )
     
 @app.route("/possible/<filename>")
 @login_required
 def serve_possible_file(filename):
-    return send_from_directory(POSSIBLE_UPLOAD_DIR, filename)
+    family_id = get_current_family_id()
+    results_dir = get_family_results_dir(family_id)
+    return send_from_directory(results_dir , filename)
 
 @app.route("/review-possible/<filename>/<action>")
 @login_required
@@ -1345,12 +1371,13 @@ def review_possible_photo(filename, action):
     member_name = request.args.get("member_name")
     face_crop = request.args.get("face_crop")
     family_id = get_current_family_id()
-
+    results_dir = get_family_results_dir(family_id)
+    possible_faces_dir = get_possible_family_photos(family_id)
     is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
 
-    possible_path = POSSIBLE_UPLOAD_DIR / filename
-    result_path = RESULTS_UPLOAD_DIR / filename
-    face_crop_path = POSSIBLE_FACES_DIR / face_crop if face_crop else None
+    possible_path = results_dir  / filename
+    result_path = results_dir  / filename
+    face_crop_path = possible_faces_dir / face_crop if face_crop else None
     if not possible_path.exists():
         message = "Possible photo not found."
 
@@ -1422,7 +1449,7 @@ def review_possible_photo(filename, action):
         return redirect(url_for("filter_photos_page"))
 
     if face_crop:
-        face_crop_path = POSSIBLE_FACES_DIR / face_crop
+        face_crop_path = possible_path / face_crop
         if face_crop_path.exists():
             face_crop_path.unlink()
 
@@ -1506,12 +1533,134 @@ def review_page():
         album_review_items=album_review_items
     )
 
+@app.route("/review/delete-learning-card", methods=["POST"])
+def delete_learning_review_card():
+    family_id = get_current_family_id()
+    data = request.get_json()
+    review_ids = data.get("review_ids", [])
+    print("delete ", family_id, data)
+    if not review_ids:
+        return jsonify({
+            "success": False,
+            "message": "No review IDs provided"
+        }), 400
+
+    placeholders = ",".join(["?"] * len(review_ids))
+
+    params = list(review_ids)
+    params.append(family_id)
+
+    reviews = database_read(
+        f"""
+        SELECT
+            photo_path,
+            face_crop_path
+        FROM learning_reviews
+        WHERE id IN ({placeholders})
+          AND family_id = ?
+        """,
+        params
+    )
+
+    database_write(
+        f"""
+        DELETE FROM learning_reviews
+        WHERE id IN ({placeholders})
+          AND family_id = ?
+        """,
+        params
+    )
+
+    for review in reviews:
+
+        photo_path = review.get("photo_path")
+        face_crop_path = review.get("face_crop_path")
+
+        try:
+            if photo_path:
+                photo_file = Path(photo_path)
+
+                if not photo_file.is_absolute():
+                    photo_file = (
+                        get_family_skipped_dir(family_id)
+                        / Path(photo_path).name
+                    )
+
+                if photo_file.exists():
+                    photo_file.unlink()
+
+        except Exception as e:
+            print("Could not delete review photo:", e)
+
+        try:
+            if face_crop_path:
+                crop_file = Path(face_crop_path)
+
+                if not crop_file.is_absolute():
+                    crop_file = (
+                        get_family_possible_faces_dir(family_id)
+                        / Path(face_crop_path).name
+                    )
+
+                if crop_file.exists():
+                    crop_file.unlink()
+
+        except Exception as e:
+            print("Could not delete face crop:", e)
+
+    return jsonify({
+        "success": True
+    })
+
+@app.route("/review/delete/<int:review_id>", methods=["POST"])
+@login_required
+def delete_review(review_id):
+    family_id = get_current_family_id()
+
+    rows = database_read("""
+        SELECT *
+        FROM learning_reviews
+        WHERE id = ?
+          AND family_id = ?
+    """, (review_id, family_id))
+
+    if not rows:
+        abort(404)
+
+    review = rows[0]
+
+    # Optional: delete physical files if they exist
+    for path_value in [
+        review.get("face_crop_path"),
+    ]:
+        if not path_value:
+            continue
+
+        try:
+            file_path = Path(path_value)
+
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as e:
+            print("Could not delete review file:", e)
+
+    database_write(
+        "DELETE FROM learning_reviews WHERE id = ? AND family_id = ?",
+        (review_id, family_id)
+    )
+
+    return jsonify({
+        "success": True,
+        "review_id": review_id
+    })
+
 @app.route("/review-face/<int:review_id>", methods=["POST"])
 @login_required
 def review_face(review_id):
     family_id = get_current_family_id()
     reviewed_member_id = request.form.get("member_id", type=int)
-
+    skipped_dir = get_family_skipped_dir(family_id)
+    results_dir = get_family_results_dir(family_id)
     review = database_read("""
         SELECT *
         FROM learning_reviews
@@ -1539,8 +1688,8 @@ def review_face(review_id):
     member = member[0]
 
     skipped_filename = review["photo_path"].replace("skipped/", "")
-    skipped_path = SKIPPED_UPLOAD_DIR / skipped_filename
-    result_path = RESULTS_UPLOAD_DIR / skipped_filename
+    skipped_path = skipped_dir / skipped_filename
+    result_path = results_dir / skipped_filename
 
     if skipped_path.exists() and not result_path.exists():
         shutil.copy(str(skipped_path), str(result_path))
@@ -1587,10 +1736,11 @@ def review_face(review_id):
 def rescan_skipped():
     family_id = get_current_family_id()
     family_embeddings = get_all_family_embeddings(family_id)
-
+    results_dir = get_family_results_dir(family_id)
+    skipped_dir = get_family_skipped_dir(family_id)
     count = 0
 
-    for file in SKIPPED_UPLOAD_DIR.iterdir():
+    for file in skipped_dir.iterdir():
         if not file.is_file():
             continue
 
@@ -1601,7 +1751,7 @@ def rescan_skipped():
         )
 
         if found:
-            result_path = RESULTS_UPLOAD_DIR / file.name
+            result_path = results_dir / file.name
             shutil.move(str(file), str(result_path))
             count += 1
 

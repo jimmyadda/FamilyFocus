@@ -1,34 +1,17 @@
 from pathlib import Path
 import sqlite3
 import hashlib
+import secrets
+
+import shutil
+from pathlib import Path
 from config import (
-    BASE_CLIENT_DIR,
     DB_PATH,
-    PHOTO_POSSIBLE_THRESHOLD,
-    PROFILE_UPLOAD_DIR,
-    INCOMING_UPLOAD_DIR,
-    RESULTS_UPLOAD_DIR,
-    MIN_FACE_SIZE_CAMERA,
-    MIN_FACE_SIZE_IMAGE,
+    FAMILIES_DIR,
     TEMP_UPLOAD_DIR,
-    PHOTO_MATCH_THRESHOLD, 
-    CAMERA_MATCH_THRESHOLD,
 )
 
-POSSIBLE_UPLOAD_DIR = BASE_CLIENT_DIR / "possible"
-POSSIBLE_FACES_DIR = BASE_CLIENT_DIR / "possible_faces"
-
-POSSIBLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)  
-
-
-SKIPPED_UPLOAD_DIR = BASE_CLIENT_DIR / "skipped"
-SKIPPED_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
-
-TEMP_DIR = Path(DB_PATH).parent / "temp"
-TEMP_DIR.mkdir(parents=True, exist_ok=True)
-
 
 def calculate_file_hash(file_path):
     hasher = hashlib.sha256()
@@ -138,18 +121,110 @@ def detection_exists(photo_id, member_id, status):
     )
 
     return len(rows) > 0
+
+def ensure_family_storage_keys():
+    families = database_read(
+        "SELECT id, client_id, storage_key FROM families"
+    )
+
+    for family in families:
+        if not family["storage_key"]:
+            storage_key = secrets.token_hex(16)
+
+            database_write(
+                "UPDATE families SET storage_key = ? WHERE id = ?",
+                (storage_key, family["id"])
+            )
+
+#Handle folder 
+
+def migrate_family_folders_to_storage_key():
+    families = database_read(
+        "SELECT id, client_id, storage_key FROM families"
+    )
+
+    for family in families:
+        client_id = family["client_id"]
+        storage_key = family["storage_key"]
+
+        if not client_id or not storage_key:
+            continue
+
+        old_dir = Path("instance") / client_id
+        new_dir = Path("instance") / "families" / storage_key
+
+        if not old_dir.exists():
+            new_dir.mkdir(parents=True, exist_ok=True)
+            continue
+
+        if new_dir.exists():
+            print(f"Family folder already migrated: {new_dir}")
+            continue
+
+        new_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_dir), str(new_dir))
+
+        print(f"Migrated family folder: {old_dir} -> {new_dir}")
+
+def get_family_storage_key(family_id):
+    rows = database_read(
+        "SELECT storage_key FROM families WHERE id = ?",
+        (family_id,)
+    )
+
+    if not rows:
+        raise Exception(f"No family found for family_id={family_id}")
+
+    storage_key = rows[0].get("storage_key")
+
+    if not storage_key:
+        raise Exception(f"No storage_key found for family_id={family_id}")
+
+    return storage_key
+
+def get_family_base_dir(family_id):
+    return FAMILIES_DIR / get_family_storage_key(family_id)
+
+def get_family_profiles_dir(family_id):
+    return get_family_base_dir(family_id) / "profiles"
+
+def get_family_results_dir(family_id):
+    return get_family_base_dir(family_id) / "results"
+
+def get_family_possible_dir(family_id):
+    return get_family_base_dir(family_id) / "possible"
+
+def get_family_possible_faces_dir(family_id):
+    return get_family_base_dir(family_id) / "possible_faces"
+
+def get_family_skipped_dir(family_id):
+    return get_family_base_dir(family_id) / "skipped"
+
+def get_incoming_upload_dir(family_id):
+    return get_family_base_dir(family_id) / "incoming"
+
+def ensure_family_dirs(family_id):
+    dirs = [
+        get_family_profiles_dir(family_id),
+        get_family_results_dir(family_id),
+        get_incoming_upload_dir(family_id),
+        get_family_possible_dir(family_id),
+        get_family_possible_faces_dir(family_id),
+        get_family_skipped_dir(family_id),
+    ]
+
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)
+
+def ensure_app_dirs():
+    FAMILIES_DIR.mkdir(parents=True, exist_ok=True)
+    TEMP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
 # -------------------------
 # Database helpers
 # -------------------------
 def init_db():
-    PROFILE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    INCOMING_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    #Possible#
-    POSSIBLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    POSSIBLE_FACES_DIR.mkdir(parents=True, exist_ok=True)
-    #########
-    RESULTS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
     database_write("""
         CREATE TABLE IF NOT EXISTS family_members (
@@ -230,6 +305,7 @@ def init_db():
             FOREIGN KEY (family_id) REFERENCES families(id)
         )
     """)
+    
     database_write("""
     CREATE INDEX IF NOT EXISTS idx_users_family_id
     ON users(family_id) 
@@ -342,6 +418,31 @@ def init_db():
         )
     """)
 
+    #Users
+    add_column_if_missing("users", "first_name", "TEXT")
+    add_column_if_missing("users", "last_name", "TEXT")
+
+     #Families
+    add_column_if_missing("families", "storage_key", "TEXT")
+
+    # 1. Make sure default family exists first
+    family_id = create_default_family()
+
+    # 2. Now make sure every family has storage_key
+    ensure_family_storage_keys()
+
+    # 3. Assign old rows to family_id
+    assign_existing_data_to_family(family_id)
+
+    # 4. Fix constraints after family_id exists
+    fix_family_members_unique_constraint()
+
+    # 5. Move old instance/adda folder to instance/families/<storage_key>
+    migrate_family_folders_to_storage_key()
+
+    # 6. Make sure required folders exist
+    ensure_family_dirs(family_id)
+
     #Learning_Review#
     add_column_if_missing("learning_reviews", "family_id", "INTEGER")
     add_column_if_missing("learning_reviews", "photo_id", "INTEGER")
@@ -360,9 +461,15 @@ def init_db():
     add_column_if_missing("learning_reviews", "image_h", "INTEGER")
 
 
-    family_id = create_default_family()
-    assign_existing_data_to_family(family_id)   
-    fix_family_members_unique_constraint()
+    families = database_read("SELECT id, client_id, storage_key FROM families")
+    for family in families:
+        if not family["storage_key"]:
+            storage_key = secrets.token_hex(16)
+            database_write(
+                "UPDATE families SET storage_key = ? WHERE id = ?",
+                (storage_key, family["id"])
+            )
+  
 
 def seed_family_members():
     family_id = create_default_family()
@@ -593,7 +700,6 @@ def fix_family_members_unique_constraint():
         RENAME TO family_members
     """)
 
-
 def save_learning_review(
     family_id,
     photo_path,
@@ -654,7 +760,8 @@ def extract_faces_for_review(image_path, filename, DeepFace):
         return []
 
     image_h, image_w = image.shape[:2]
-
+    family_id = create_default_family()
+    possible_faces = get_family_possible_faces_dir(family_id)
     faces_for_review = []
 
     try:
@@ -685,7 +792,7 @@ def extract_faces_for_review(image_path, filename, DeepFace):
             continue
 
         face_crop_filename = f"{Path(filename).stem}_unknown_{index}.jpg"
-        face_crop_path = POSSIBLE_FACES_DIR / face_crop_filename
+        face_crop_path = possible_faces / face_crop_filename
 
         cv2.imwrite(str(face_crop_path), crop)
 

@@ -16,7 +16,24 @@
 
     <link rel="stylesheet"
           href="{{ url_for('static', filename='css/app.css') }}">
-</head>
+
+          <style>            
+            .logout-link {
+                color: #ef4444;
+                font-weight: 700;
+
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+
+                text-decoration: none;
+            }
+
+            .logout-link:hover {
+                color: #dc2626;
+            }
+          </style>
+        </head>
 
 <body>
 
@@ -72,6 +89,13 @@
             class="{% if request.endpoint == 'review_page' %}active{% endif %}">
             Review
         </a>
+
+
+        {% if session.get("user_id") %}
+            <a href="{{ url_for('logout') }}" class="logout-link">
+                ↩ Logout
+            </a>
+        {% endif %}
 
     </div>
 

@@ -1,17 +1,27 @@
 from pathlib import Path
+from dotenv import load_dotenv
+import os
 
-# Client / tenant
-CLIENT_ID = "adda"
+load_dotenv()
+
 
 # Base folders
-BASE_CLIENT_DIR = Path("instance") / CLIENT_ID
-DB_PATH = BASE_CLIENT_DIR / "family_focus.db"
+DB_PATH = os.getenv("DATABASE_PATH", "instance/family_focus.db")
 
-PROFILE_UPLOAD_DIR = BASE_CLIENT_DIR / "profiles"
-INCOMING_UPLOAD_DIR = BASE_CLIENT_DIR / "incoming"
-RESULTS_UPLOAD_DIR = BASE_CLIENT_DIR / "results"
-TEMP_UPLOAD_DIR = BASE_CLIENT_DIR / "temp"
+INSTANCE_DIR = Path("instance")
+TEMP_DIR = INSTANCE_DIR / "temp"
 
+TEMP_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+FAMILIES_DIR = INSTANCE_DIR / "families"
+TEMP_UPLOAD_DIR = INSTANCE_DIR / "temp"
+
+SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
+EMBEDDING_ENCRYPTION_KEY = os.getenv("EMBEDDING_ENCRYPTION_KEY")
+MAX_CONTENT_LENGTH = 300 * 1024 * 1024
 # DeepFace settings
 FACE_MODEL_NAME = "Facenet512"
 FACE_DETECTOR_BACKEND = "opencv"
