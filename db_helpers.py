@@ -2,7 +2,7 @@ from pathlib import Path
 import sqlite3
 import hashlib
 import secrets
-
+from flask import session, abort
 import shutil
 from pathlib import Path
 from config import (
@@ -563,12 +563,24 @@ def assign_existing_data_to_family(family_id):
 """ def get_current_family_id():
     return 1 """
 
-def database_read(query, params=()):
+""" def database_read(query, params=()):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        return [dict(row) for row in rows] """
 
+def database_read(query, params=(), one=False):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        cursor = conn.execute(query, params)
+
+        if one:
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
 def database_write(query, params=()):
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(query, params)
@@ -807,3 +819,67 @@ def extract_faces_for_review(image_path, filename, DeepFace):
         })
 
     return faces_for_review    
+
+#Family ID & ownership
+def require_family_id():
+    family_id = session.get("family_id")
+    if not family_id:
+        abort(403)
+    return family_id
+
+def get_owned_member(member_id):
+    family_id = require_family_id()
+
+    member = database_read(
+        """
+        SELECT *
+        FROM family_members
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (member_id, family_id),
+        one=True
+    )
+
+    if not member:
+        abort(403)
+
+    return member   
+
+def get_owned_photo(photo_id):
+    family_id = require_family_id()
+
+    photo = database_read(
+        """
+        SELECT *
+        FROM family_photos
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (photo_id, family_id),
+        one=True
+    )
+
+    if not photo:
+        abort(403)
+
+    return photo
+
+def get_owned_detection(detection_id):
+    family_id = require_family_id()
+
+    detection = database_read(
+        """
+        SELECT *
+        FROM photo_detections
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (detection_id, family_id),
+        one=True
+    )
+
+    if not detection:
+        abort(403)
+
+    return detection        

@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 import cv2
 from db_helpers import *
+from functools import wraps  
 import numpy as np
 from flask import (
     abort, send_file,
@@ -432,7 +433,6 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     print(f"Learned new embedding for {member_name}")
     return True
 
-
 # -------------------------
 # User Login and Registration
 # -------------------------
@@ -556,10 +556,20 @@ def logout():
             "DELETE FROM user_sessions WHERE token = ?",
             (session_token,)
         )
+    session.pop("user_id", None)
+    session.pop("family_id", None)
+    session.pop("family_name", None)
     session.clear()
     flash("You have been logged out.", "success")
     return redirect(url_for("login"))    
 
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("user_id"):
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return wrapper
 # -------------------------
 # Main pages
 # -------------------------
@@ -640,6 +650,7 @@ def create_member():
 @login_required
 def member_page(member_id):
     family_id = get_current_family_id()
+    member = get_owned_member(member_id)
 
     rows = database_read(
         "SELECT * FROM family_members WHERE id = ?",
@@ -722,7 +733,7 @@ def family_album():
 @login_required
 def member_album(member_id):
     family_id = get_current_family_id()
-
+    memberown = get_owned_member(member_id)
     member = database_read(
         """
         SELECT *
@@ -749,7 +760,7 @@ def member_album(member_id):
 @login_required
 def confirm_detection(detection_id):
     family_id = get_current_family_id()
-
+    detection = get_owned_detection(detection_id)
     detection = database_read(
         """
         SELECT *
@@ -781,7 +792,7 @@ def confirm_detection(detection_id):
 @login_required
 def reject_detection(detection_id):
     family_id = get_current_family_id()
-
+    detection = get_owned_detection(detection_id)
     database_write(
         """
         UPDATE photo_detections
@@ -915,10 +926,26 @@ def delete_member_photo(photo_id):
 @app.route("/profile-file/<int:member_id>/<filename>")
 @login_required
 def serve_profile_file(member_id, filename):
-    family_id = get_current_family_id()
+
+    # Verify member belongs to current family
+    member = get_owned_member(member_id)
+
+    safe_filename = secure_filename(filename)
+
+    if safe_filename != filename:
+        abort(403)
+
+    family_id = member["family_id"]
+
     profile_dir = get_family_profiles_dir(family_id)
     folder = profile_dir / str(member_id)
-    return send_from_directory(folder, filename)
+
+    file_path = folder / safe_filename
+
+    if not file_path.exists():
+        abort(404)
+
+    return send_from_directory(folder, safe_filename)
 
 @app.errorhandler(413)
 def too_large(e):
@@ -1342,17 +1369,33 @@ def filter_photos_upload():
 @app.route("/results/<filename>")
 @login_required
 def serve_result_file(filename):
+
     family_id = get_current_family_id()
     results_dir = get_family_results_dir(family_id)
-    return send_from_directory(results_dir, filename)
+
+    safe_filename = secure_filename(filename)
+
+    if safe_filename != filename:
+        abort(403)
+
+    file_path = results_dir / safe_filename
+
+    if not file_path.exists():
+        abort(404)
+
+    return send_from_directory(results_dir, safe_filename)
 
 @app.route("/serve-skipped/<path:filename>")
 @login_required
 def serve_skipped_file(filename):
     family_id = get_current_family_id()
+    
     skipped_dir = get_family_skipped_dir(family_id)
     filename = filename.replace("skipped/", "")
-
+    # Path traversal protection
+    safe_filename = secure_filename(filename)
+    if safe_filename != filename:
+        abort(403)
     return send_from_directory(
         skipped_dir,
         filename
@@ -1362,8 +1405,19 @@ def serve_skipped_file(filename):
 @login_required
 def serve_possible_file(filename):
     family_id = get_current_family_id()
-    results_dir = get_family_results_dir(family_id)
-    return send_from_directory(results_dir , filename)
+    possible_dir = get_family_possible_dir(family_id)
+
+    safe_filename = secure_filename(filename)
+
+    if safe_filename != filename:
+        abort(403)
+
+    file_path = possible_dir / safe_filename
+
+    if not file_path.exists():
+        abort(404)
+
+    return send_from_directory(possible_dir, safe_filename)
 
 @app.route("/review-possible/<filename>/<action>")
 @login_required
@@ -1372,12 +1426,20 @@ def review_possible_photo(filename, action):
     face_crop = request.args.get("face_crop")
     family_id = get_current_family_id()
     results_dir = get_family_results_dir(family_id)
-    possible_faces_dir = get_possible_family_photos(family_id)
+    possible_faces_dir = get_family_possible_faces_dir(family_id)
     is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
 
     possible_path = results_dir  / filename
     result_path = results_dir  / filename
-    face_crop_path = possible_faces_dir / face_crop if face_crop else None
+    if face_crop:
+        safe_face_crop = secure_filename(face_crop)
+
+        if safe_face_crop != face_crop:
+            abort(403)
+
+        face_crop_path = possible_faces_dir / safe_face_crop
+    else:
+        face_crop_path = None
     if not possible_path.exists():
         message = "Possible photo not found."
 
@@ -1762,7 +1824,7 @@ def rescan_skipped():
 @login_required
 def send_detection_to_review(photo_id, member_id):
     family_id = get_current_family_id()
-
+    member = get_owned_member(member_id)
     database_write(
         """
         UPDATE photo_detections
