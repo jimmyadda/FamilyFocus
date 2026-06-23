@@ -4,41 +4,389 @@
 
 {% block content %}
 
-<div class="filter-page-v2">
+<style>
+.upload-page-v2 {
+    max-width: 760px;
+    margin: 36px auto;
+    padding: 0 18px 60px;
+}
 
-    <section class="filter-hero-card">
+.upload-hero {
+    text-align: center;
+}
 
-        <div class="filter-copy">
-            <span class="filter-badge">Bulk photo scan</span>
+.upload-badge {
+    display: inline-block;
+    background: #ffedd5;
+    color: #ea580c;
+    padding: 10px 18px;
+    border-radius: 999px;
+    font-weight: 900;
+    margin-bottom: 18px;
+}
 
-            <h1>Upload group photos</h1>
+.upload-hero h1 {
+    font-size: 44px;
+    margin: 0 0 14px;
+    color: #0f172a;
+}
 
-            <p>
-                Family Focus will scan your WhatsApp, school, trip, or event photos
-                and return only the pictures that contain your family.
-            </p>
-        </div>
+.upload-hero p {
+    max-width: 560px;
+    margin: 0 auto 26px;
+    color: #475569;
+    font-size: 18px;
+    line-height: 1.6;
+}
 
-        <form
-            class="filter-upload-box js-detect-images-form"
-            method="POST"
-            action="{{ url_for('filter_photos_upload') }}"
-            enctype="multipart/form-data"
-        >
-            <div class="upload-icon-large">📁</div>
+.upload-dropzone {
+    display: block;
+    background: #ffffff;
+    border: 2px dashed #cbd5e1;
+    border-radius: 28px;
+    padding: 38px 24px;
+    box-shadow: 0 18px 45px rgba(15, 23, 42, 0.10);
+    cursor: pointer;
+}
 
-            <h2>Select photos to scan</h2>
-            <p>Choose multiple JPG, JPEG, or PNG images.</p>
+.upload-dropzone strong {
+    color: #7c3aed;
+}
 
-            <input type="file" name="photos" multiple required>
+.upload-dropzone span {
+    color: #334155;
+}
 
-            <button type="submit">
-                Scan Photos
-            </button>
-        </form>
+.upload-dropzone small {
+    display: block;
+    margin-top: 10px;
+    color: #64748b;
+}
 
-    </section>
+.upload-icon {
+    width: 54px;
+    height: 54px;
+    margin: 0 auto 14px;
+    border-radius: 18px;
+    background: #eef2ff;
+    display: grid;
+    place-items: center;
+    font-size: 26px;
+}
+
+.upload-queue {
+    margin-top: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+}
+
+.upload-card {
+    background: #ffffff;
+    border-radius: 22px;
+    padding: 18px 20px;
+    box-shadow: 0 14px 35px rgba(15, 23, 42, 0.10);
+    border: 1px solid #e5e7eb;
+}
+
+.upload-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+}
+
+.upload-file-name {
+    font-weight: 900;
+    color: #0f172a;
+    font-size: 16px;
+    word-break: break-word;
+}
+
+.upload-file-size {
+    margin-top: 5px;
+    color: #64748b;
+    font-size: 13px;
+}
+
+.upload-status {
+    font-weight: 900;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.upload-progress-bg {
+    margin-top: 14px;
+    height: 9px;
+    background: #f1f5f9;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.upload-progress-bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    transition: width 0.25s ease, background 0.25s ease;
+}
+
+.upload-card.waiting .upload-progress-bar {
+    background: #cbd5e1;
+}
+
+.upload-card.uploading .upload-progress-bar {
+    background: #7c3aed;
+}
+
+.upload-card.scanning .upload-progress-bar {
+    background: #f97316;
+}
+
+.upload-card.done .upload-progress-bar {
+    background: #22c55e;
+}
+
+.upload-card.failed .upload-progress-bar {
+    background: #ef4444;
+}
+
+.upload-card.waiting .upload-status {
+    color: #64748b;
+}
+
+.upload-card.uploading .upload-status {
+    color: #7c3aed;
+}
+
+.upload-card.scanning .upload-status {
+    color: #f97316;
+}
+
+.upload-card.done .upload-status {
+    color: #16a34a;
+}
+
+.upload-card.failed .upload-status {
+    color: #dc2626;
+}
+
+.upload-actions {
+    margin-top: 24px;
+    text-align: center;
+}
+
+.view-results-btn {
+    display: none;
+    border: none;
+    border-radius: 18px;
+    padding: 14px 22px;
+    background: linear-gradient(135deg, #f97316, #14b8a6);
+    color: white;
+    font-weight: 900;
+    text-decoration: none;
+}
+
+.view-results-btn.show {
+    display: inline-block;
+}
+
+@media (max-width: 640px) {
+    .upload-hero h1 {
+        font-size: 34px;
+    }
+
+    .upload-card-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}
+</style>
+
+<div class="upload-page-v2">
+
+```
+<div class="upload-hero">
+
+    <div class="upload-badge">Bulk photo scan</div>
+
+    <h1>Upload group photos</h1>
+
+    <p>
+        Family Focus will scan your WhatsApp, school, trip, or event photos
+        and return only the pictures that contain your family.
+    </p>
+
+    <label class="upload-dropzone" for="photoInput">
+        <div class="upload-icon">📤</div>
+        <strong>Click here</strong>
+        <span> to upload photos or drag and drop.</span>
+        <small>Supported: JPG, JPEG, PNG, WEBP, HEIC</small>
+    </label>
+
+    <input
+        type="file"
+        id="photoInput"
+        name="photos"
+        multiple
+        accept="image/*"
+        hidden>
 
 </div>
+
+<div id="uploadQueue" class="upload-queue"></div>
+
+<div class="upload-actions">
+    <a id="viewResultsBtn" class="view-results-btn" href="{{ url_for('family_album') }}">
+        View results
+    </a>
+</div>
+```
+
+</div>
+
+<script>
+const input = document.getElementById("photoInput");
+const queue = document.getElementById("uploadQueue");
+const viewResultsBtn = document.getElementById("viewResultsBtn");
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function createUploadCard(file) {
+    const card = document.createElement("div");
+    card.className = "upload-card waiting";
+
+    card.innerHTML = `
+        <div class="upload-card-header">
+            <div>
+                <div class="upload-file-name">${file.name}</div>
+                <div class="upload-file-size">${formatFileSize(file.size)}</div>
+            </div>
+            <div class="upload-status">Waiting...</div>
+        </div>
+
+        <div class="upload-progress-bg">
+            <div class="upload-progress-bar"></div>
+        </div>
+    `;
+
+    queue.appendChild(card);
+
+    return {
+        card,
+        bar: card.querySelector(".upload-progress-bar"),
+        status: card.querySelector(".upload-status")
+    };
+}
+
+function setCardStatus(ui, status, percent, text) {
+    ui.card.classList.remove("waiting", "uploading", "scanning", "done", "failed");
+    ui.card.classList.add(status);
+
+    ui.bar.style.width = percent + "%";
+    ui.status.textContent = text;
+}
+
+input.addEventListener("change", async function () {
+    queue.innerHTML = "";
+    viewResultsBtn.classList.remove("show");
+
+    const files = Array.from(input.files);
+
+    const jobs = files.map(file => {
+        const ui = createUploadCard(file);
+        setCardStatus(ui, "waiting", 0, "Waiting...");
+        return { file, ui };
+    });
+
+    for (const job of jobs) {
+        try {
+            await uploadAndScanFile(job.file, job.ui);
+        } catch (err) {
+            console.error(err);
+            setCardStatus(job.ui, "failed", 100, "Failed");
+        }
+    }
+    viewResultsBtn.classList.add("show");
+    //window.location.href = "{{ url_for('family_album') }}";
+});
+
+function uploadAndScanFile(file, ui) {
+    return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        formData.append("photo", file);
+
+        const xhr = new XMLHttpRequest();
+
+        xhr.open("POST", "{{ url_for('scan_one_photo_ajax') }}", true);
+
+        xhr.upload.onprogress = function (event) {
+            if (event.lengthComputable) {
+                const percent = Math.round((event.loaded / event.total) * 100);
+                setCardStatus(ui, "uploading", percent, `Uploading ${percent}%`);
+            }
+        };
+
+        xhr.onloadstart = function () {
+            setCardStatus(ui, "uploading", 1, "Uploading 1%");
+        };
+
+        xhr.onload = function () {
+            if (xhr.status !== 200) {
+                setCardStatus(ui, "failed", 100, "Failed");
+                reject();
+                return;
+            }
+
+            let response;
+
+            try {
+                response = JSON.parse(xhr.responseText);
+            } catch (err) {
+                setCardStatus(ui, "failed", 100, "Bad response");
+                reject();
+                return;
+            }
+
+            if (!response.ok) {
+                setCardStatus(ui, "failed", 100, "Failed");
+                reject();
+                return;
+            }
+
+            const status = response.result.status;
+            const names = response.result.names || [];
+            const namesText = names.length ? ` (${names.join(", ")})` : "";
+
+            if (status === "matched") {
+                setCardStatus(ui, "done", 100, `✓ Matched${namesText}`);
+            } else if (status === "possible") {
+                setCardStatus(ui, "done", 100, `✓ Possible${namesText}`);
+            } else if (status === "skipped") {
+                setCardStatus(ui, "done", 100, "✓ Review");
+            } else {
+                setCardStatus(ui, "done", 100, "✓ Done");
+            }
+
+            resolve(response);
+        };
+
+        xhr.onerror = function () {
+            setCardStatus(ui, "failed", 100, "Failed");
+            reject();
+        };
+
+        xhr.upload.onload = function () {
+            setCardStatus(ui, "scanning", 45, "Scanning...");
+        };
+
+        xhr.send(formData);
+    });
+}
+</script>
 
 {% endblock %}

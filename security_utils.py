@@ -100,3 +100,13 @@ def encrypt_embedding(embedding):
 def decrypt_embedding(encrypted_embedding):
     raw = get_fernet().decrypt(encrypted_embedding.encode("utf-8"))
     return json.loads(raw.decode("utf-8"))
+
+def safe_delete_file(path):
+    try:
+        if path and path.exists() and path.is_file():
+            path.unlink()
+            return True
+    except Exception as e:
+        print("DELETE FILE ERROR:", e)
+
+    return False    

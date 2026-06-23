@@ -18,12 +18,15 @@ from flask import (
     request,
     send_from_directory,
     url_for,
+    current_app,
     get_flashed_messages,
     session
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from auth import login_required, get_current_family_id
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+
 try:
     from deepface import DeepFace
 except ImportError:
@@ -51,7 +54,7 @@ from face_utils import (
 )
 from dotenv import load_dotenv
 import os
-
+from security_utils import decrypt_embedding,encrypt_embedding
 from db_helpers import (
     get_family_profiles_dir,
     get_incoming_upload_dir,
@@ -121,12 +124,13 @@ def get_all_family_embeddings():
             me.id,
             me.member_id,
             me.embedding,
+            me.embedding_encrypted,
             fm.name
         FROM member_embeddings me
         JOIN family_members fm 
             ON fm.id = me.member_id
         WHERE me.family_id = ?
-        AND fm.family_id = ?
+          AND fm.family_id = ?
     """, (family_id, family_id))
 
     print("LOADED EMBEDDINGS:", len(rows), "FAMILY:", family_id)
@@ -134,10 +138,15 @@ def get_all_family_embeddings():
     family_embeddings = []
 
     for row in rows:
+        if row["embedding_encrypted"]:
+            embedding = decrypt_embedding(row["embedding_encrypted"])
+        else:
+            embedding = json.loads(row["embedding"])  # old records fallback
+
         family_embeddings.append({
             "member_id": row["member_id"],
             "name": row["name"],
-            "embedding": json.loads(row["embedding"])
+            "embedding": embedding
         })
 
     return family_embeddings
@@ -270,11 +279,44 @@ def image_contains_known_family(image_path, family_embeddings, DeepFace):
 
     return len(matches) > 0, matched_names, matches, possible_names, possible_matches
 
+#-------------------------
+# Image and file helpers
+#------------------------
+def get_image_serializer():
+    return URLSafeTimedSerializer(current_app.config["SECRET_KEY"])
 
+def create_photo_token(photo_id, family_id):
+    serializer = get_image_serializer()
+    return serializer.dumps({
+        "photo_id": photo_id,
+        "family_id": family_id
+    })
+
+def verify_photo_token(photo_id, family_id, max_age=600):
+    token = request.args.get("token")
+
+    if not token:
+        abort(403)
+
+    serializer = get_image_serializer()
+
+    try:
+        data = serializer.loads(token, max_age=max_age)
+    except SignatureExpired:
+        abort(403)
+    except BadSignature:
+        abort(403)
+
+    if data.get("photo_id") != photo_id:
+        abort(403)
+
+    if data.get("family_id") != family_id:
+        abort(403)
+
+    return True
 # -------------------------
 # Members helpers
 # -------------------------
-
 
 def get_all_members():
     family_id = get_current_family_id()
@@ -416,7 +458,7 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     )
 
     photo_id = database_read("SELECT last_insert_rowid() AS id")[0]["id"]
-
+    encrypted_embedding = encrypt_embedding(embedding)
     database_write(
         """
         INSERT INTO member_embeddings (family_id,member_id, photo_id, embedding)
@@ -426,7 +468,7 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
             family_id,
             member_id,
             photo_id,
-            json.dumps(embedding)
+            json.dumps(encrypted_embedding)
         )
     )
 
@@ -617,12 +659,46 @@ def home():
         ORDER BY fp.created_at DESC
         LIMIT 8
     """, (family_id, family_id))
+    #onboarding: if no photos, show recent uploads
+    members_count = database_read(
+    "SELECT COUNT(*) AS count FROM family_members WHERE family_id = ?",
+        (family_id,), one=True)["count"]
+
+    profile_photos_count = database_read(
+        """
+        SELECT COUNT(*) AS count
+        FROM member_photos mp
+        JOIN family_members fm ON fm.id = mp.member_id
+        WHERE fm.family_id = ?
+        """,
+        (family_id,),
+        one=True
+    )["count"]
+
+    embeddings_count = database_read(
+        """
+        SELECT COUNT(*) AS count
+        FROM member_embeddings me
+        JOIN family_members fm ON fm.id = me.member_id
+        WHERE fm.family_id = ?
+        """,
+        (family_id,),
+        one=True
+    )["count"]
+
+    show_onboarding = (
+        members_count == 0
+        or profile_photos_count == 0
+        or embeddings_count == 0
+    )
+    print(show_onboarding, members_count, profile_photos_count, embeddings_count)
 
     return render_template(
         "dashboard.html",
         stats=stats,
         members=members,
-        recent_photos=recent_photos
+        recent_photos=recent_photos,
+        show_onboarding=show_onboarding
     )
 
 
@@ -718,8 +794,12 @@ def family_album():
 
     for photo in confirmed_photos:
         photo["people"] = get_photo_people(family_id, photo["id"])
+        photo["token"] = create_photo_token(photo["id"], family_id)
 
     possible_photos = get_possible_family_photos(family_id)
+
+    for photo in possible_photos:
+        photo["token"] = create_photo_token(photo["id"], family_id)
 
     return render_template(
         "album.html",
@@ -861,6 +941,7 @@ def upload_member_photos(member_id):
         filename = f"{uuid.uuid4()}.{ext}"
 
         save_path = member_dir / filename
+        
         file.save(save_path)
 
         family_id = get_current_family_id()
@@ -1018,7 +1099,7 @@ def rebuild_embeddings(member_id):
                 continue
 
             embedding = result[0]["embedding"]
-
+            encrypted_embedding = encrypt_embedding(embedding)
             database_write(
                 """
                 INSERT INTO member_embeddings
@@ -1029,7 +1110,7 @@ def rebuild_embeddings(member_id):
                     family_id,
                     member_id,
                     photo["id"],
-                    json.dumps(embedding)
+                    encrypted_embedding
                 )
             )
 
@@ -1185,7 +1266,7 @@ def family_file(filename):
 def filter_photos_page():
     return render_template("filter_photos.html")
 
-@app.route("/filter-photos", methods=["POST"])
+""" @app.route("/filter-photos", methods=["POST"])
 @login_required
 def filter_photos_upload():
     files = request.files.getlist("photos")
@@ -1364,7 +1445,54 @@ def filter_photos_upload():
         kept=kept,
         possible=possible,
         skipped=skipped
+    ) """
+
+
+
+@app.route("/filter-photos", methods=["POST"])
+@login_required
+def filter_photos_upload():
+    files = request.files.getlist("photos")
+
+    if not files:
+        flash("No photos selected.")
+        return redirect(url_for("filter_photos_page"))
+
+    kept = []
+    possible = []
+    skipped = 0
+
+    family_id = get_current_family_id()
+    family_embeddings = get_all_family_embeddings()
+
+    print("FAMILY EMBEDDINGS LOADED:", len(family_embeddings))
+
+    for file in files:
+        result = scan_one_family_photo(file, family_id, family_embeddings)
+        print(
+            f"SCAN RESULT | "
+            f"status={result['status']} "
+            f"file={file.filename}"
+        )
+
+        if result["status"] == "matched":
+            kept.append(result)
+
+        elif result["status"] == "possible":
+            possible.append(result)
+
+        else:
+            skipped += 1
+
+    get_flashed_messages()
+
+    return render_template(
+        "filter_results.html",
+        kept=kept,
+        possible=possible,
+        skipped=skipped
     )
+
 
 @app.route("/results/<filename>")
 @login_required
@@ -1587,7 +1715,10 @@ def review_page():
           AND pd.status = 'possible'
         ORDER BY pd.created_at DESC
     """, (family_id,))
-
+    for item in album_review_items:
+        item["image_token"] = create_photo_token(item["photo_id"], family_id)
+    
+    
     return render_template(
         "review.html",
         members=members,
@@ -1596,11 +1727,12 @@ def review_page():
     )
 
 @app.route("/review/delete-learning-card", methods=["POST"])
+@login_required
 def delete_learning_review_card():
     family_id = get_current_family_id()
-    data = request.get_json()
+    data = request.get_json() or {}
     review_ids = data.get("review_ids", [])
-    print("delete ", family_id, data)
+
     if not review_ids:
         return jsonify({
             "success": False,
@@ -1608,15 +1740,11 @@ def delete_learning_review_card():
         }), 400
 
     placeholders = ",".join(["?"] * len(review_ids))
-
-    params = list(review_ids)
-    params.append(family_id)
+    params = list(review_ids) + [family_id]
 
     reviews = database_read(
         f"""
-        SELECT
-            photo_path,
-            face_crop_path
+        SELECT id, photo_path, face_crop_path
         FROM learning_reviews
         WHERE id IN ({placeholders})
           AND family_id = ?
@@ -1633,46 +1761,39 @@ def delete_learning_review_card():
         params
     )
 
-    for review in reviews:
+    skipped_dir = get_family_skipped_dir(family_id)
+    faces_dir = get_family_possible_faces_dir(family_id)
 
+    for review in reviews:
         photo_path = review.get("photo_path")
         face_crop_path = review.get("face_crop_path")
 
-        try:
-            if photo_path:
-                photo_file = Path(photo_path)
+        if face_crop_path:
+            crop_file = faces_dir / Path(face_crop_path).name
+            if crop_file.exists() and crop_file.is_file():
+                crop_file.unlink()
 
-                if not photo_file.is_absolute():
-                    photo_file = (
-                        get_family_skipped_dir(family_id)
-                        / Path(photo_path).name
-                    )
+        if photo_path:
+            remaining = database_read(
+                """
+                SELECT id
+                FROM learning_reviews
+                WHERE family_id = ?
+                  AND photo_path = ?
+                LIMIT 1
+                """,
+                (family_id, photo_path),
+                one=True
+            )
 
-                if photo_file.exists():
+            if not remaining:
+                photo_file = skipped_dir / Path(photo_path).name
+                if photo_file.exists() and photo_file.is_file():
                     photo_file.unlink()
 
-        except Exception as e:
-            print("Could not delete review photo:", e)
+    return jsonify({"success": True})
 
-        try:
-            if face_crop_path:
-                crop_file = Path(face_crop_path)
 
-                if not crop_file.is_absolute():
-                    crop_file = (
-                        get_family_possible_faces_dir(family_id)
-                        / Path(face_crop_path).name
-                    )
-
-                if crop_file.exists():
-                    crop_file.unlink()
-
-        except Exception as e:
-            print("Could not delete face crop:", e)
-
-    return jsonify({
-        "success": True
-    })
 
 @app.route("/review/delete/<int:review_id>", methods=["POST"])
 @login_required
@@ -1843,30 +1964,201 @@ def send_detection_to_review(photo_id, member_id):
     return redirect(request.referrer or url_for("family_album"))
 
 @app.route("/album-file/<int:photo_id>")
+@login_required
 def serve_album_file(photo_id):
     family_id = get_current_family_id()
 
-    rows = database_read(
-        """
-        SELECT file_path
-        FROM family_photos
-        WHERE id = ?
-          AND family_id = ?
-        """,
-        (photo_id, family_id)
-    )
+    photo = get_owned_photo(photo_id)
 
-    if not rows:
-        return "File not found", 404
+    verify_photo_token(photo_id, family_id)
 
-    file_path = Path(rows[0]["file_path"])
+    file_path = Path(photo["file_path"])
+
+    if not file_path.exists():
+        abort(404)
 
     return send_from_directory(file_path.parent, file_path.name)
 
 
-
-
+#-------------------------
+# Upload photos from mobile app
 # -------------------------
+
+def scan_one_family_photo(file, family_id, family_embeddings):
+    possible_faces_dir = get_family_possible_dir(family_id)
+    skipped_dir = get_family_skipped_dir(family_id)
+    incoming_dir = get_incoming_upload_dir(family_id)
+
+    if not file or file.filename == "":
+        return {"status": "skipped", "reason": "empty"}
+
+    if not allowed_file(file.filename):
+        return {"status": "skipped", "reason": "invalid_file"}
+
+    original = secure_filename(file.filename)
+    ext = original.rsplit(".", 1)[1].lower()
+    filename = f"{uuid.uuid4()}.{ext}"
+
+    incoming_path = incoming_dir / filename
+    file.save(incoming_path)
+
+    found, matched_names, matches, possible_names, possible_matches = image_contains_known_family(
+        incoming_path,
+        family_embeddings,
+        DeepFace
+    )
+
+    if found:
+        results_dir = get_family_results_dir(family_id)
+        result_path = results_dir / filename
+
+        create_annotated_family_image(
+            incoming_path,
+            matches,
+            result_path
+        )
+
+        photo_id = create_family_photo(
+            family_id=family_id,
+            file_path=result_path,
+            original_filename=file.filename,
+            source="web"
+        )
+
+        for match in matches:
+            name = match.get("name")
+            distance = match.get("distance")
+            member_id = get_member_id_by_name(name, family_id)
+
+            if member_id:
+                create_photo_detection(
+                    family_id=family_id,
+                    photo_id=photo_id,
+                    member_id=member_id,
+                    face_crop_path=None,
+                    distance=distance,
+                    status="confirmed",
+                    confirmed_by_user=0
+                )
+
+        try:
+            incoming_path.unlink()
+        except Exception:
+            pass
+
+        return {
+            "status": "matched",
+            "filename": filename,
+            "original": original,
+            "names": matched_names,
+            "matches": matches,
+            "path": url_for("serve_result_file", filename=filename)
+        }
+
+    if possible_matches:
+        possible_path = possible_faces_dir / filename
+
+        create_annotated_family_image(
+            incoming_path,
+            possible_matches,
+            possible_path
+        )
+
+        photo_id = create_family_photo(
+            family_id=family_id,
+            file_path=possible_path,
+            original_filename=file.filename,
+            source="web"
+        )
+
+        for match in possible_matches:
+            name = match.get("name")
+            distance = match.get("distance")
+            member_id = get_member_id_by_name(name, family_id)
+
+            if member_id:
+                create_photo_detection(
+                    family_id=family_id,
+                    photo_id=photo_id,
+                    member_id=member_id,
+                    face_crop_path=None,
+                    distance=distance,
+                    status="possible",
+                    confirmed_by_user=0
+                )
+
+        try:
+            incoming_path.unlink()
+        except Exception:
+            pass
+
+        return {
+            "status": "possible",
+            "filename": filename,
+            "original": original,
+            "names": possible_names,
+            "matches": possible_matches,
+            "path": url_for("serve_possible_file", filename=filename)
+        }
+
+    skipped_path = skipped_dir / filename
+    shutil.copy(str(incoming_path), str(skipped_path))
+
+    unknown_faces = extract_faces_for_review(
+        incoming_path,
+        filename,
+        DeepFace
+    )
+
+    for face in unknown_faces:
+        save_learning_review(
+            family_id=family_id,
+            photo_path=filename,
+            face_crop_path=f"possible_faces/{face['face_crop_filename']}",
+            predicted_member_id=None,
+            reviewed_member_id=None,
+            distance=None,
+            action="unknown",
+            box_x=face["box_x"],
+            box_y=face["box_y"],
+            box_w=face["box_w"],
+            box_h=face["box_h"],
+            image_w=face["image_w"],
+            image_h=face["image_h"]
+        )
+
+    try:
+        incoming_path.unlink()
+    except Exception:
+        pass
+
+    return {
+        "status": "skipped",
+        "filename": filename,
+        "original": original
+    }
+
+
+@app.route("/scan-one-photo", methods=["POST"])
+@login_required
+def scan_one_photo_ajax():
+    if "photo" not in request.files:
+        return jsonify({"ok": False, "error": "No photo"}), 400
+
+    family_id = get_current_family_id()
+    family_embeddings = get_all_family_embeddings()
+
+    result = scan_one_family_photo(
+        request.files["photo"],
+        family_id,
+        family_embeddings
+    )
+
+    return jsonify({
+        "ok": True,
+        "result": result
+    })    
+#-------------------------
 # Run app
 # -------------------------
 

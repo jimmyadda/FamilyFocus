@@ -150,14 +150,12 @@ Family Album
 
             <div class="album-card">
 
-                {% set filename = photo.file_path.replace('\\', '/').split('/')[-1] %}
-
-            <a href="{{ url_for('serve_result_file', filename=filename) }}" target="_blank">
-                <img
-                    src="{{ url_for('serve_result_file', filename=filename) }}"
-                    alt="Family photo"
-                >
-            </a>
+                <a href="{{ url_for('serve_album_file', photo_id=photo.id, token=photo.token) }}" target="_blank">
+                    <img
+                        src="{{ url_for('serve_album_file', photo_id=photo.id, token=photo.token) }}"
+                        alt="Family photo"
+                    >
+                </a>
 
 
                 <div class="album-people">

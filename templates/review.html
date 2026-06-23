@@ -265,9 +265,9 @@ Review Faces
 
                         <div class="album-image-wrap">
                             <img
-                                src="{{ url_for('serve_album_file', photo_id=item.photo_id) }}"
-                                alt="Review photo">
-
+                                src="{{ url_for('serve_album_file', photo_id=item.photo_id , token=item.image_token ) }}"
+                                alt="Review photo"
+                                data-photo-id="{{ item.photo_id }}">                                
                             <button
                                 type="button"
                                 class="review-delete-btn"
