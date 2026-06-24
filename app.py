@@ -68,6 +68,9 @@ from db_helpers import (
 
 
 load_dotenv()
+BOT_API_SECRET = os.getenv("BOT_API_SECRET")
+
+
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
@@ -2157,7 +2160,45 @@ def scan_one_photo_ajax():
     return jsonify({
         "ok": True,
         "result": result
-    })    
+    }) 
+
+
+# -------------------------
+# Telegram API
+# -------------------------
+@app.route("/api/telegram/status", methods=["POST"])
+def api_telegram_status():
+    data = request.get_json(silent=True) or {}
+    chat_id = str(data.get("telegram_chat_id", "")).strip()
+
+    if not chat_id:
+        return jsonify({"error": "missing telegram_chat_id"}), 400
+
+    row = database_read(
+        """
+        SELECT family_name, email, status, created_at
+        FROM telegram_registration_requests
+        WHERE telegram_chat_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (chat_id,),
+        one=True,
+    )
+
+    if not row:
+        return jsonify({"found": False})
+
+    return jsonify({
+        "found": True,
+        "family_name": row["family_name"],
+        "email": row["email"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+    })
+
+
+
 #-------------------------
 # Run app
 # -------------------------

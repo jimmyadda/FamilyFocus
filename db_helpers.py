@@ -378,6 +378,31 @@ def init_db():
         )
     """)
 
+
+## Telegram tables#
+    database_write("""
+        CREATE TABLE IF NOT EXISTS telegram_registration_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            telegram_chat_id TEXT NOT NULL,
+            telegram_username TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT
+        )
+    """)
+    database_write("""
+       CREATE TABLE IF NOT EXISTS telegram_link_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    family_id INTEGER NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0,
+    created_at TEXT
+)
+    """)
+
     add_column_if_missing(
         "family_photos",
         "family_id",
