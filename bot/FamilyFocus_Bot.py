@@ -37,6 +37,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Future existing-user link:
     # /start link_abc123
+    print(text,chat_id,username)
     if text.startswith("/start link_"):
         token = text.replace("/start link_", "").strip()
         await handle_link_token(update, token, chat_id, username)
@@ -47,6 +48,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "To register a new family, send:\n"
         "/registerfamily"
     )
+
+
 
 
 async def register_family(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,48 +89,47 @@ async def save_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def handle_link_token(update, token, chat_id, username):
-    rows = database_read(
-        """
-        SELECT id, user_id, family_id
-        FROM telegram_link_tokens
-        WHERE token = ?
-          AND used = 0
-          AND expires_at > datetime('now')
-        """,
-        (token,),
-    )
+async def handle_link_token(update: Update, token: str, chat_id: int, username: str | None):
+    try:
+        print("CALLING FLASK LINK API")
+        print("TOKEN:", token)
+        print("CHAT ID:", chat_id)
+        print("USERNAME:", username)
+        print("URL:", f"{API_BASE_URL}/api/telegram/link-account")
 
-    if not rows:
-        await update.message.reply_text("❌ This Telegram link is expired or invalid.")
+        response = requests.post(
+            f"{API_BASE_URL}/api/telegram/link-account",
+            json={
+                "token": token,
+                "telegram_chat_id": chat_id,
+                "telegram_username": username
+            },
+            timeout=15
+        )
+
+        print("STATUS CODE:", response.status_code)
+        print("RAW RESPONSE:", response.text)
+
+        data = response.json()
+        print("JSON RESPONSE:", data)
+
+    except Exception as e:
+        print("Telegram link error:", e)
+        await update.message.reply_text(
+            "❌ Could not connect to Family Focus right now.\n"
+            "Please try again in a few minutes."
+        )
         return
 
-    link = rows[0]
-
-    database_write(
-        """
-        UPDATE users
-        SET telegram_chat_id = ?,
-            telegram_username = ?
-        WHERE id = ?
-          AND family_id = ?
-        """,
-        (str(chat_id), username, link["user_id"], link["family_id"]),
-    )
-
-    database_write(
-        """
-        UPDATE telegram_link_tokens
-        SET used = 1
-        WHERE id = ?
-        """,
-        (link["id"],),
-    )
-
-    await update.message.reply_text(
-        "✅ Telegram connected successfully.\n\n"
-        "You can now upload photos here later."
-    )
+    if data.get("success"):
+        await update.message.reply_text(
+            "✅ Telegram connected to Family Focus!\n\n"
+            "You can now send family photos here, and I'll add them to your Family Focus account."
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ {data.get('message', 'Could not connect Telegram.')}"
+        )
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):

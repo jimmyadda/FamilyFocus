@@ -8,6 +8,6 @@ deepface==0.0.93
 tensorflow==2.16.1
 tf-keras==2.16.0
 Pillow==10.4.0
-
+filetype
 python-dotenv==1.0.1
 python-telegram-bot==21.6

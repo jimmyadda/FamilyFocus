@@ -65,6 +65,7 @@ from db_helpers import (
     ensure_family_dirs,
     ensure_app_dirs,
 )
+from telegram_utils import *
 
 
 load_dotenv()
@@ -694,14 +695,48 @@ def home():
         or profile_photos_count == 0
         or embeddings_count == 0
     )
-    print(show_onboarding, members_count, profile_photos_count, embeddings_count)
+    members_count = database_read(
+        "SELECT COUNT(*) AS c FROM family_members WHERE family_id = ?",
+        (family_id,),
+        one=True
+    )["c"]
 
+    profile_photos_count = database_read(
+        """
+        SELECT COUNT(*) AS c
+        FROM member_photos mp
+        JOIN family_members fm ON fm.id = mp.member_id
+        WHERE fm.family_id = ?
+        """,
+        (family_id,),
+        one=True
+    )["c"]
+
+    detected_count = database_read(
+        "SELECT COUNT(*) AS c FROM photo_detections WHERE family_id = ?",
+        (family_id,),
+        one=True
+    )["c"]
+
+    if members_count == 0:
+        current_step = 1
+    elif profile_photos_count == 0:
+        current_step = 2
+    elif detected_count == 0:
+        current_step = 4
+    else:
+        current_step = 5
+
+
+    user = get_current_user()
     return render_template(
         "dashboard.html",
         stats=stats,
+        user=user,
         members=members,
         recent_photos=recent_photos,
-        show_onboarding=show_onboarding
+        show_onboarding=show_onboarding,
+        current_step=current_step
     )
 
 
@@ -709,14 +744,19 @@ def home():
 # Member Routes
 # -------------------------
 @app.route("/members/create", methods=["POST"])
+@login_required
 def create_member():
+    family_id = get_current_family_id()
     name = request.form.get("name", "").strip()
 
     if name:
         try:
             database_write(
-                "INSERT INTO family_members (name) VALUES (?)",
-                (name,)
+                """
+                INSERT INTO family_members (family_id, name, created_at)
+                VALUES (?, ?, datetime('now'))
+                """,
+                (family_id, name)
             )
         except sqlite3.IntegrityError:
             pass
@@ -1268,188 +1308,6 @@ def family_file(filename):
 @login_required
 def filter_photos_page():
     return render_template("filter_photos.html")
-
-""" @app.route("/filter-photos", methods=["POST"])
-@login_required
-def filter_photos_upload():
-    files = request.files.getlist("photos")
-
-    if not files:
-        flash("No photos selected.")
-        return redirect(url_for("filter_photos_page"))
-
-    kept = []
-    possible = []
-    skipped = 0
-
-    family_id = get_current_family_id()
-    possible_faces_dir = get_family_possible_dir(family_id)
-    skipped_dir = get_family_skipped_dir(family_id)
-    incoming_dir = get_incoming_upload_dir(family_id)
-
-    family_embeddings = get_all_family_embeddings()
-    print("FAMILY EMBEDDINGS LOADED:", len(family_embeddings))
-
-    for file in files:
-        if not file or file.filename == "":
-            continue
-
-        if not allowed_file(file.filename):
-            skipped += 1
-            continue
-
-        original = secure_filename(file.filename)
-        ext = original.rsplit(".", 1)[1].lower()
-        filename = f"{uuid.uuid4()}.{ext}"
-
-        incoming_path = incoming_dir / filename
-        file.save(incoming_path)
-
-        found, matched_names, matches, possible_names, possible_matches = image_contains_known_family(
-            incoming_path,
-            family_embeddings,
-            DeepFace
-        )
-
-        if found:
-            family_id = get_current_family_id()
-            results_dir = get_family_results_dir(family_id)
-
-            result_path = results_dir / filename
-            #result_path = RESULTS_UPLOAD_DIR / filename
-
-            create_annotated_family_image(
-                incoming_path,
-                matches,
-                result_path
-            )
-
-            photo_id = create_family_photo(
-                family_id=family_id,
-                file_path=result_path,
-                original_filename=file.filename,
-                source="web"
-            )
-
-            for match in matches:
-                name = match.get("name")
-                distance = match.get("distance")
-
-                member_id = get_member_id_by_name(name, family_id)
-
-                if member_id:
-                    create_photo_detection(
-                        family_id=family_id,
-                        photo_id=photo_id,
-                        member_id=member_id,
-                        face_crop_path=None,
-                        distance=distance,
-                        status="confirmed",
-                        confirmed_by_user=0
-                    )
-
-            kept.append({
-                "filename": filename,
-                "original": original,
-                "names": matched_names,
-                "matches": matches,
-                "path": url_for("serve_result_file", filename=filename),
-                "status": "matched"
-            })
-
-            try:
-                incoming_path.unlink()
-            except Exception:
-                pass
-
-        elif possible_matches:
-            possible_path = possible_faces_dir / filename
-
-            create_annotated_family_image(
-                incoming_path,
-                possible_matches,
-                possible_path
-            )
-
-            photo_id = create_family_photo(
-                family_id=family_id,
-                file_path=possible_path,
-                original_filename=file.filename,
-                source="web"
-            )
-
-            for match in possible_matches:
-                name = match.get("name")
-                distance = match.get("distance")
-
-                member_id = get_member_id_by_name(name, family_id)
-
-                if member_id:
-                    create_photo_detection(
-                        family_id=family_id,
-                        photo_id=photo_id,
-                        member_id=member_id,
-                        face_crop_path=None,
-                        distance=distance,
-                        status="possible",
-                        confirmed_by_user=0
-                    )
-
-            possible.append({
-                "filename": filename,
-                "original": original,
-                "names": possible_names,
-                "matches": possible_matches,
-                "path": url_for("serve_possible_file", filename=filename),
-                "status": "possible"
-            })
-
-            try:
-                incoming_path.unlink()
-            except Exception:
-                pass
-
-        else:
-            skipped_path = skipped_dir / filename
-            shutil.copy(str(incoming_path), str(skipped_path))
-
-            unknown_faces = extract_faces_for_review(
-                incoming_path,
-                filename,
-                DeepFace
-            )
-
-            for face in unknown_faces:
-                save_learning_review(
-                    family_id=family_id,
-                    photo_path=filename,
-                    face_crop_path=f"possible_faces/{face['face_crop_filename']}",
-                    predicted_member_id=None,
-                    reviewed_member_id=None,
-                    distance=None,
-                    action="unknown",
-                    box_x=face["box_x"],
-                    box_y=face["box_y"],
-                    box_w=face["box_w"],
-                    box_h=face["box_h"],
-                    image_w=face["image_w"],
-                    image_h=face["image_h"]
-                )
-
-            try:
-                incoming_path.unlink()
-            except Exception:
-                pass
-
-    get_flashed_messages()
-
-    return render_template(
-        "filter_results.html",
-        kept=kept,
-        possible=possible,
-        skipped=skipped
-    ) """
-
 
 
 @app.route("/filter-photos", methods=["POST"])
@@ -2196,6 +2054,192 @@ def api_telegram_status():
         "status": row["status"],
         "created_at": row["created_at"],
     })
+
+@app.route("/admin/telegram-requests")
+@login_required
+def telegram_requests_admin():
+    requests_rows = database_read(
+        """
+        SELECT id, family_name, email, telegram_chat_id, telegram_username, status, created_at
+        FROM telegram_registration_requests
+        ORDER BY 
+            CASE status 
+                WHEN 'pending' THEN 0 
+                WHEN 'approved' THEN 1 
+                WHEN 'rejected' THEN 2 
+                ELSE 3 
+            END,
+            id DESC
+        """
+    )
+
+    return render_template(
+        "telegram_requests_admin.html",
+        requests_rows=requests_rows
+    )
+
+@app.route("/api/telegram/link-account", methods=["POST"])
+def api_telegram_link_account():
+    data = request.get_json(silent=True) or {}
+
+    token = data.get("token")
+    telegram_chat_id = data.get("telegram_chat_id")
+    telegram_username = data.get("telegram_username")
+
+    if not token or not telegram_chat_id:
+        return jsonify({
+            "success": False,
+            "message": "Missing token or telegram_chat_id."
+        }), 400
+
+    success, message = link_telegram_account(
+        token=token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_username=telegram_username
+    )
+
+    return jsonify({
+        "success": success,
+        "message": message
+    })
+
+@app.route("/telegram/connect")
+@login_required
+def telegram_connect():
+
+    token = create_telegram_link_token(
+        user_id=session["user_id"],
+        family_id=session["family_id"]
+    )
+
+    bot_username = os.getenv("TELEGRAM_BOT_USERNAME")
+
+    if not bot_username:
+        flash("Telegram bot is not configured.", "error")
+        return redirect(url_for("dashboard"))
+
+    return redirect(
+        f"https://t.me/{bot_username}?start=link_{token}"
+    )
+
+    
+# telegram registration request approval/rejection
+
+
+@app.route("/admin/telegram-requests/<int:request_id>/approve", methods=["POST"])
+@login_required
+def approve_telegram_request(request_id):
+    req = database_read(
+        """
+        SELECT *
+        FROM telegram_registration_requests
+        WHERE id = ?
+        """,
+        (request_id,),
+        one=True
+    )
+
+    if not req:
+        flash("Telegram request not found.", "error")
+        return redirect(url_for("telegram_requests_admin"))
+
+    if req["status"] != "pending":
+        flash("Request already handled.", "warning")
+        return redirect(url_for("telegram_requests_admin"))
+
+    family_name = req["family_name"].strip()
+    email = req["email"].strip().lower()
+    storage_key = make_storage_key(family_name)
+    temp_password = generate_temp_password()
+    password_hash = generate_password_hash(temp_password)
+
+    family_id = database_write(
+        """
+        INSERT INTO families (family_name, client_id, storage_key, created_at)
+        VALUES (?, ?, ?, datetime('now'))
+        """,
+        (family_name, storage_key, storage_key)
+    )
+
+    ensure_family_dirs(family_id)
+
+    user_id = database_write(
+        """
+        INSERT INTO users
+        (family_id, email, password_hash, telegram_chat_id, telegram_username, role, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?, 'admin', 1, datetime('now'))
+        """,
+        (
+            family_id,
+            email,
+            password_hash,
+            req["telegram_chat_id"],
+            req["telegram_username"]
+        )
+    )
+
+    database_write(
+        """
+        UPDATE telegram_registration_requests
+        SET status = 'approved'
+        WHERE id = ?
+        """,
+        (request_id,)
+    )
+
+    login_url = request.host_url.rstrip("/") + url_for("login")
+
+    send_telegram_message(
+        req["telegram_chat_id"],
+        (
+            "🎉 <b>Family Focus Registration Approved</b>\n\n"
+            f"Family: {family_name}\n\n"
+            f"Login URL:\n{login_url}\n\n"
+            f"Email:\n{email}\n\n"
+            f"Temporary Password:\n{temp_password}\n\n"
+            "Please log in and change your password."
+        )
+    )
+
+    flash("Telegram registration approved successfully.", "success")
+    return redirect(url_for("telegram_requests_admin"))
+
+@app.route("/admin/telegram-requests/<int:request_id>/reject", methods=["POST"])
+@login_required
+def reject_telegram_request(request_id):
+    req = database_read(
+        """
+        SELECT *
+        FROM telegram_registration_requests
+        WHERE id = ?
+        """,
+        (request_id,),
+        one=True
+    )
+
+    if not req:
+        flash("Telegram request not found.", "error")
+        return redirect(url_for("telegram_requests_admin"))
+
+    database_write(
+        """
+        UPDATE telegram_registration_requests
+        SET status = 'rejected'
+        WHERE id = ?
+        """,
+        (request_id,)
+    )
+
+    send_telegram_message(
+        req["telegram_chat_id"],
+        (
+            "❌ Your Family Focus registration request was not approved.\n\n"
+            "Please contact the Family Focus administrator."
+        )
+    )
+
+    flash("Telegram registration rejected.", "warning")
+    return redirect(url_for("telegram_requests_admin"))
 
 
 

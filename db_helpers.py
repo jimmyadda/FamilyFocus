@@ -379,7 +379,7 @@ def init_db():
     """)
 
 
-## Telegram tables#
+    ## Telegram tables#
     database_write("""
         CREATE TABLE IF NOT EXISTS telegram_registration_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -392,16 +392,47 @@ def init_db():
         )
     """)
     database_write("""
-       CREATE TABLE IF NOT EXISTS telegram_link_tokens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    family_id INTEGER NOT NULL,
-    token TEXT NOT NULL UNIQUE,
-    expires_at TEXT NOT NULL,
-    used INTEGER DEFAULT 0,
-    created_at TEXT
-)
+        CREATE TABLE IF NOT EXISTS telegram_link_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL,
+            family_id INTEGER NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
     """)
+    #Telegram batch uploads
+    database_write("""
+        CREATE TABLE IF NOT EXISTS telegram_upload_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        family_id INTEGER NOT NULL,
+        telegram_chat_id TEXT NOT NULL,
+        status TEXT DEFAULT 'processing',
+        upload_count INTEGER DEFAULT 0,
+        confirmed_count INTEGER DEFAULT 0,
+        possible_count INTEGER DEFAULT 0,
+        skipped_count INTEGER DEFAULT 0,
+        result_url TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        finished_at TEXT
+    )
+    """)
+
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS telegram_upload_batch_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id INTEGER NOT NULL,
+            photo_id INTEGER,
+            original_filename TEXT,
+            status TEXT,
+            detected_member_name TEXT,
+            possible_member_name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
 
     add_column_if_missing(
         "family_photos",
@@ -495,7 +526,6 @@ def init_db():
                 (storage_key, family["id"])
             )
   
-
 def seed_family_members():
     family_id = create_default_family()
 
@@ -585,14 +615,6 @@ def assign_existing_data_to_family(family_id):
         WHERE family_id IS NULL
     """, (family_id,))
 
-""" def get_current_family_id():
-    return 1 """
-
-""" def database_read(query, params=()):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows] """
 
 def database_read(query, params=(), one=False):
     with sqlite3.connect(DB_PATH) as conn:
@@ -606,6 +628,7 @@ def database_read(query, params=(), one=False):
 
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
 def database_write(query, params=()):
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(query, params)
@@ -907,4 +930,20 @@ def get_owned_detection(detection_id):
     if not detection:
         abort(403)
 
-    return detection        
+    return detection  
+
+def get_current_user():
+    
+    user_id = session.get("user_id")
+    if not user_id:
+        return None
+
+    return database_read(
+        """
+        SELECT *
+        FROM users
+        WHERE id = ?
+        """,
+        (user_id,),
+        one=True
+    )          

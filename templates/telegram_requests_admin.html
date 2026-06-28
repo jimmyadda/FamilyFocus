@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="telegram-admin-page">
+
+    <div class="telegram-admin-header">
+        <div>
+            <div class="eyebrow">Family Focus Admin</div>
+            <h1>Telegram Registration Requests</h1>
+            <p>Approve or reject new families waiting to join Family Focus.</p>
+        </div>
+
+        <a href="{{ url_for('home') }}" class="btn-soft">
+            ← Back to Dashboard
+        </a>
+    </div>
+
+    {% if requests_rows %}
+        <div class="telegram-grid">
+            {% for req in requests_rows %}
+                <div class="telegram-card">
+                    <div class="telegram-card-top">
+                        <div>
+                            <div class="family-name">{{ req.family_name }}</div>
+                            <div class="email">{{ req.email }}</div>
+                        </div>
+
+                        <span class="status-badge status-{{ req.status }}">
+                            {{ req.status|capitalize }}
+                        </span>
+                    </div>
+
+                    <div class="telegram-details">
+                        <div><strong>Telegram:</strong>
+                            {% if req.telegram_username %}
+                                @{{ req.telegram_username }}
+                            {% else %}
+                                No username
+                            {% endif %}
+                        </div>
+
+                        <div><strong>Chat ID:</strong> {{ req.telegram_chat_id }}</div>
+                    </div>
+
+                    {% if req.status == "pending" %}
+                        <div class="telegram-actions">
+                            <form method="POST" action="{{ url_for('approve_telegram_request', request_id=req.id) }}">
+                                <button type="submit" class="btn-gradient">Approve</button>
+                            </form>
+
+                            <form method="POST" action="{{ url_for('reject_telegram_request', request_id=req.id) }}">
+                                <button type="submit" class="btn-danger-soft">Reject</button>
+                            </form>
+                        </div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-card">
+            No Telegram registration requests yet.
+        </div>
+    {% endif %}
+
+</div>
+{% endblock %}
