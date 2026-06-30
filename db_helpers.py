@@ -5,6 +5,7 @@ import secrets
 from flask import session, abort
 import shutil
 from pathlib import Path
+import json
 from config import (
     DB_PATH,
     FAMILIES_DIR,
@@ -12,6 +13,380 @@ from config import (
 )
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
+
+
+# Main db helpers
+# -------------------------
+# Database helpers
+# -------------------------
+def init_db():
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS family_members (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER,
+            name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(family_id, name)
+        )
+    """)
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS member_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            member_id INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(member_id) REFERENCES family_members(id)
+        )
+    """)
+
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS member_embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            member_id INTEGER NOT NULL,
+            photo_id INTEGER,
+            embedding TEXT,
+            embedding_encrypted TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS learning_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            family_id INTEGER NOT NULL,
+
+            photo_id INTEGER,
+            photo_path TEXT,
+
+            face_crop_path TEXT,
+
+            box_x INTEGER,
+            box_y INTEGER,
+            box_w INTEGER,
+            box_h INTEGER,
+            predicted_member_id INTEGER,
+            reviewed_member_id INTEGER,
+            distance REAL,
+            action TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS families (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_name TEXT NOT NULL,
+            client_id TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+    #Users Tables & Indexes
+    database_write("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            first_name TEXT,
+            last_name TEXT,
+            telegram_chat_id TEXT,
+            telegram_username TEXT,
+            role TEXT DEFAULT 'admin',
+            is_active INTEGER DEFAULT 1,
+            last_login TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (family_id) REFERENCES families(id)
+        )
+    """)
+    
+    database_write("""
+    CREATE INDEX IF NOT EXISTS idx_users_family_id
+    ON users(family_id) 
+    """)
+
+    database_write("""
+    CREATE INDEX IF NOT EXISTS idx_users_telegram_chat_id
+    ON users(telegram_chat_id)
+    """)
+
+    database_write("""
+    CREATE TABLE IF NOT EXISTS user_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token TEXT NOT NULL,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+        #Family ID 
+
+    add_column_if_missing(
+            "family_members",
+            "family_id",
+            "INTEGER"
+        )
+
+    add_column_if_missing(
+            "member_photos",
+            "family_id",
+            "INTEGER"
+        )
+
+    add_column_if_missing(
+            "member_embeddings",
+            "family_id",
+            "INTEGER"
+        )
+
+    add_column_if_missing(
+        "member_embeddings",
+        "embedding_encrypted",
+        "TEXT"
+    )
+    add_column_if_missing(
+            "learning_reviews",
+            "family_id",
+            "INTEGER"
+        ) 
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS family_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            original_filename TEXT,
+            source TEXT DEFAULT 'web',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS photo_detections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL,
+            photo_id INTEGER NOT NULL,
+            member_id INTEGER,
+            face_crop_path TEXT,
+            distance REAL,
+            status TEXT NOT NULL DEFAULT 'possible',
+            confirmed_by_user INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    database_write("""
+        CREATE INDEX IF NOT EXISTS idx_member_embeddings_family
+        ON member_embeddings(family_id)
+    """)
+
+    database_write("""
+        CREATE INDEX IF NOT EXISTS idx_member_embeddings_member
+        ON member_embeddings(member_id)
+    """)
+    ## Telegram tables#
+    database_write("""
+        CREATE TABLE IF NOT EXISTS telegram_registration_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            telegram_chat_id TEXT NOT NULL,
+            telegram_username TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT
+        )
+    """)
+    database_write("""
+        CREATE TABLE IF NOT EXISTS telegram_link_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL,
+            family_id INTEGER NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    #Telegram batch uploads
+    database_write("""
+        CREATE TABLE IF NOT EXISTS telegram_upload_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        family_id INTEGER NOT NULL,
+        telegram_chat_id TEXT NOT NULL,
+        status TEXT DEFAULT 'processing',
+        upload_count INTEGER DEFAULT 0,
+        confirmed_count INTEGER DEFAULT 0,
+        possible_count INTEGER DEFAULT 0,
+        skipped_count INTEGER DEFAULT 0,
+        result_url TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        finished_at TEXT
+    )
+    """)
+
+
+    database_write("""
+        CREATE TABLE IF NOT EXISTS telegram_upload_batch_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id INTEGER NOT NULL,
+            photo_id INTEGER,
+            original_filename TEXT,
+            status TEXT,
+            detected_member_name TEXT,
+            possible_member_name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    database_write("""
+    CREATE TABLE IF NOT EXISTS telegram_upload_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        family_id INTEGER NOT NULL,
+        telegram_chat_id TEXT NOT NULL,
+        telegram_file_id TEXT,
+        telegram_message_id TEXT,
+        caption TEXT,
+        status TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    add_column_if_missing(
+        "family_photos",
+        "family_id",
+        "INTEGER"
+    )
+
+    add_column_if_missing(
+        "photo_detections",
+        "family_id",
+        "INTEGER"
+    )
+
+    add_column_if_missing(
+        "family_photos",
+        "file_hash",
+        "TEXT"
+    )
+    database_write("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_family_photo_hash
+    ON family_photos(family_id, file_hash)
+    """)
+    
+    database_write("""
+        CREATE TABLE IF NOT EXISTS photo_faces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            photo_id INTEGER NOT NULL,
+            face_crop_path TEXT,
+            box_x INTEGER,
+            box_y INTEGER,
+            box_w INTEGER,
+            box_h INTEGER,
+            predicted_member_id INTEGER,
+            predicted_name TEXT,
+            distance REAL,
+            status TEXT, -- confirmed / possible / unknown / rejected / manual
+            reviewed_member_id INTEGER,
+            reviewed_at TEXT
+        )
+    """)
+
+    #Users
+    add_column_if_missing("users", "first_name", "TEXT")
+    add_column_if_missing("users", "last_name", "TEXT")
+
+     #Families
+    add_column_if_missing("families", "storage_key", "TEXT")
+
+    # 1. Make sure default family exists first
+    family_id = create_default_family()
+
+    # 2. Now make sure every family has storage_key
+    ensure_family_storage_keys()
+
+    # 3. Assign old rows to family_id
+    assign_existing_data_to_family(family_id)
+
+    # 4. Fix constraints after family_id exists
+    fix_family_members_unique_constraint()
+
+    # 5. Move old instance/adda folder to instance/families/<storage_key>
+    migrate_family_folders_to_storage_key()
+
+    # 6. Make sure required folders exist
+    ensure_family_dirs(family_id)
+
+    #Learning_Review#
+    add_column_if_missing("learning_reviews", "family_id", "INTEGER")
+    add_column_if_missing("learning_reviews", "photo_id", "INTEGER")
+    add_column_if_missing("learning_reviews", "photo_path", "TEXT")
+    add_column_if_missing("learning_reviews", "face_crop_path", "TEXT")
+
+    add_column_if_missing("learning_reviews", "box_x", "INTEGER")
+    add_column_if_missing("learning_reviews", "box_y", "INTEGER")
+    add_column_if_missing("learning_reviews", "box_w", "INTEGER")
+    add_column_if_missing("learning_reviews", "box_h", "INTEGER")
+
+    add_column_if_missing("learning_reviews", "predicted_member_id", "INTEGER")
+    add_column_if_missing("learning_reviews", "reviewed_member_id", "INTEGER")
+    add_column_if_missing("learning_reviews", "distance", "REAL")
+    add_column_if_missing("learning_reviews", "image_w", "INTEGER")
+    add_column_if_missing("learning_reviews", "image_h", "INTEGER")
+
+
+    families = database_read("SELECT id, client_id, storage_key FROM families")
+    for family in families:
+        if not family["storage_key"]:
+            storage_key = secrets.token_hex(16)
+            database_write(
+                "UPDATE families SET storage_key = ? WHERE id = ?",
+                (storage_key, family["id"])
+            )
+  
+#End of init    
+
+
+
+
+
+
+def database_read(query, params=(), one=False):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        cursor = conn.execute(query, params)
+
+        if one:
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+def database_write(query, params=()):
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(query, params)
+        conn.commit()
+        return cur.lastrowid
+
+def column_exists(table_name, column_name):
+    rows = database_read(f"PRAGMA table_info({table_name})")
+    return any(row["name"] == column_name for row in rows)
+
+def add_column_if_missing(table_name, column_name, column_sql):
+    if not column_exists(table_name, column_name):
+        database_write(f"""
+            ALTER TABLE {table_name}
+            ADD COLUMN {column_name} {column_sql}
+        """)
+        
 
 def calculate_file_hash(file_path):
     hasher = hashlib.sha256()
@@ -221,311 +596,7 @@ def ensure_app_dirs():
     TEMP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# -------------------------
-# Database helpers
-# -------------------------
-def init_db():
 
-    database_write("""
-        CREATE TABLE IF NOT EXISTS family_members (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_id INTEGER,
-            name TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(family_id, name)
-        )
-    """)
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS member_photos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            member_id INTEGER NOT NULL,
-            file_path TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(member_id) REFERENCES family_members(id)
-        )
-    """)
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS member_embeddings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            member_id INTEGER NOT NULL,
-            photo_id INTEGER,
-            embedding TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS learning_reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            family_id INTEGER NOT NULL,
-
-            photo_id INTEGER,
-            photo_path TEXT,
-
-            face_crop_path TEXT,
-
-            box_x INTEGER,
-            box_y INTEGER,
-            box_w INTEGER,
-            box_h INTEGER,
-            predicted_member_id INTEGER,
-            reviewed_member_id INTEGER,
-            distance REAL,
-            action TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS families (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_name TEXT NOT NULL,
-            client_id TEXT UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-    #Users Tables & Indexes
-    database_write("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_id INTEGER NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            first_name TEXT,
-            last_name TEXT,
-            telegram_chat_id TEXT,
-            telegram_username TEXT,
-            role TEXT DEFAULT 'admin',
-            is_active INTEGER DEFAULT 1,
-            last_login TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (family_id) REFERENCES families(id)
-        )
-    """)
-    
-    database_write("""
-    CREATE INDEX IF NOT EXISTS idx_users_family_id
-    ON users(family_id) 
-    """)
-
-    database_write("""
-    CREATE INDEX IF NOT EXISTS idx_users_telegram_chat_id
-    ON users(telegram_chat_id)
-    """)
-
-    database_write("""
-    CREATE TABLE IF NOT EXISTS user_sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    token TEXT NOT NULL,
-    expires_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-    """)
-        #Family ID 
-
-    add_column_if_missing(
-            "family_members",
-            "family_id",
-            "INTEGER"
-        )
-
-    add_column_if_missing(
-            "member_photos",
-            "family_id",
-            "INTEGER"
-        )
-
-    add_column_if_missing(
-            "member_embeddings",
-            "family_id",
-            "INTEGER"
-        )
-
-    add_column_if_missing(
-            "learning_reviews",
-            "family_id",
-            "INTEGER"
-        ) 
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS family_photos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_id INTEGER NOT NULL,
-            file_path TEXT NOT NULL,
-            original_filename TEXT,
-            source TEXT DEFAULT 'web',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS photo_detections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_id INTEGER NOT NULL,
-            photo_id INTEGER NOT NULL,
-            member_id INTEGER,
-            face_crop_path TEXT,
-            distance REAL,
-            status TEXT NOT NULL DEFAULT 'possible',
-            confirmed_by_user INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-
-    ## Telegram tables#
-    database_write("""
-        CREATE TABLE IF NOT EXISTS telegram_registration_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            telegram_chat_id TEXT NOT NULL,
-            telegram_username TEXT,
-            status TEXT DEFAULT 'pending',
-            created_at TEXT
-        )
-    """)
-    database_write("""
-        CREATE TABLE IF NOT EXISTS telegram_link_tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            token TEXT UNIQUE NOT NULL,
-            user_id INTEGER NOT NULL,
-            family_id INTEGER NOT NULL,
-            expires_at TEXT NOT NULL,
-            used_at TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    #Telegram batch uploads
-    database_write("""
-        CREATE TABLE IF NOT EXISTS telegram_upload_batches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        family_id INTEGER NOT NULL,
-        telegram_chat_id TEXT NOT NULL,
-        status TEXT DEFAULT 'processing',
-        upload_count INTEGER DEFAULT 0,
-        confirmed_count INTEGER DEFAULT 0,
-        possible_count INTEGER DEFAULT 0,
-        skipped_count INTEGER DEFAULT 0,
-        result_url TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        finished_at TEXT
-    )
-    """)
-
-
-    database_write("""
-        CREATE TABLE IF NOT EXISTS telegram_upload_batch_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            batch_id INTEGER NOT NULL,
-            photo_id INTEGER,
-            original_filename TEXT,
-            status TEXT,
-            detected_member_name TEXT,
-            possible_member_name TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-
-    add_column_if_missing(
-        "family_photos",
-        "family_id",
-        "INTEGER"
-    )
-
-    add_column_if_missing(
-        "photo_detections",
-        "family_id",
-        "INTEGER"
-    )
-
-    add_column_if_missing(
-        "family_photos",
-        "file_hash",
-        "TEXT"
-    )
-    database_write("""
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_family_photo_hash
-    ON family_photos(family_id, file_hash)
-    """)
-    
-    database_write("""
-        CREATE TABLE IF NOT EXISTS photo_faces (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            photo_id INTEGER NOT NULL,
-            face_crop_path TEXT,
-            box_x INTEGER,
-            box_y INTEGER,
-            box_w INTEGER,
-            box_h INTEGER,
-            predicted_member_id INTEGER,
-            predicted_name TEXT,
-            distance REAL,
-            status TEXT, -- confirmed / possible / unknown / rejected / manual
-            reviewed_member_id INTEGER,
-            reviewed_at TEXT
-        )
-    """)
-
-    #Users
-    add_column_if_missing("users", "first_name", "TEXT")
-    add_column_if_missing("users", "last_name", "TEXT")
-
-     #Families
-    add_column_if_missing("families", "storage_key", "TEXT")
-
-    # 1. Make sure default family exists first
-    family_id = create_default_family()
-
-    # 2. Now make sure every family has storage_key
-    ensure_family_storage_keys()
-
-    # 3. Assign old rows to family_id
-    assign_existing_data_to_family(family_id)
-
-    # 4. Fix constraints after family_id exists
-    fix_family_members_unique_constraint()
-
-    # 5. Move old instance/adda folder to instance/families/<storage_key>
-    migrate_family_folders_to_storage_key()
-
-    # 6. Make sure required folders exist
-    ensure_family_dirs(family_id)
-
-    #Learning_Review#
-    add_column_if_missing("learning_reviews", "family_id", "INTEGER")
-    add_column_if_missing("learning_reviews", "photo_id", "INTEGER")
-    add_column_if_missing("learning_reviews", "photo_path", "TEXT")
-    add_column_if_missing("learning_reviews", "face_crop_path", "TEXT")
-
-    add_column_if_missing("learning_reviews", "box_x", "INTEGER")
-    add_column_if_missing("learning_reviews", "box_y", "INTEGER")
-    add_column_if_missing("learning_reviews", "box_w", "INTEGER")
-    add_column_if_missing("learning_reviews", "box_h", "INTEGER")
-
-    add_column_if_missing("learning_reviews", "predicted_member_id", "INTEGER")
-    add_column_if_missing("learning_reviews", "reviewed_member_id", "INTEGER")
-    add_column_if_missing("learning_reviews", "distance", "REAL")
-    add_column_if_missing("learning_reviews", "image_w", "INTEGER")
-    add_column_if_missing("learning_reviews", "image_h", "INTEGER")
-
-
-    families = database_read("SELECT id, client_id, storage_key FROM families")
-    for family in families:
-        if not family["storage_key"]:
-            storage_key = secrets.token_hex(16)
-            database_write(
-                "UPDATE families SET storage_key = ? WHERE id = ?",
-                (storage_key, family["id"])
-            )
-  
 def seed_family_members():
     family_id = create_default_family()
 
@@ -616,36 +687,7 @@ def assign_existing_data_to_family(family_id):
     """, (family_id,))
 
 
-def database_read(query, params=(), one=False):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
 
-        cursor = conn.execute(query, params)
-
-        if one:
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-
-def database_write(query, params=()):
-    with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.execute(query, params)
-        conn.commit()
-        return cur.lastrowid
-
-def column_exists(table_name, column_name):
-    rows = database_read(f"PRAGMA table_info({table_name})")
-    return any(row["name"] == column_name for row in rows)
-
-def add_column_if_missing(table_name, column_name, column_sql):
-    if not column_exists(table_name, column_name):
-        database_write(f"""
-            ALTER TABLE {table_name}
-            ADD COLUMN {column_name} {column_sql}
-        """)
-        
 def get_confirmed_family_photos(family_id):
     return database_read(
         """
@@ -775,7 +817,7 @@ def save_learning_review(
     image_w=None,
     image_h=None,
     photo_id=None
-):
+    ):
     database_write("""
         INSERT INTO learning_reviews (
             family_id,
@@ -869,6 +911,7 @@ def extract_faces_for_review(image_path, filename, DeepFace):
     return faces_for_review    
 
 #Family ID & ownership
+
 def require_family_id():
     family_id = session.get("family_id")
     if not family_id:
@@ -946,4 +989,79 @@ def get_current_user():
         """,
         (user_id,),
         one=True
-    )          
+    )  
+
+
+# Telegram related helpers
+
+def get_user_by_telegram_chat_id(telegram_chat_id):
+    return database_read("""
+        SELECT 
+            id,
+            family_id,
+            email,
+            telegram_chat_id,
+            telegram_username
+        FROM users
+        WHERE CAST(telegram_chat_id AS TEXT) = CAST(? AS TEXT)
+          AND is_active = 1
+        LIMIT 1
+    """, (str(telegram_chat_id),), one=True)        
+
+def get_all_family_embeddings_for_family(family_id):
+    rows = database_read("""
+        SELECT 
+            me.id,
+            me.member_id,
+            me.embedding,
+            me.embedding_encrypted,
+            fm.name
+        FROM member_embeddings me
+        JOIN family_members fm 
+            ON fm.id = me.member_id
+        WHERE me.family_id = ?
+          AND fm.family_id = ?
+    """, (family_id, family_id))
+
+    family_embeddings = []
+
+    for row in rows:
+        if row["embedding_encrypted"]:
+            embedding = decrypt_embedding(row["embedding_encrypted"])
+        else:
+            embedding = json.loads(row["embedding"])
+
+        family_embeddings.append({
+            "member_id": row["member_id"],
+            "name": row["name"],
+            "embedding": embedding
+        })
+
+    return family_embeddings    
+
+def save_telegram_upload_log(
+    family_id,
+    telegram_chat_id,
+    telegram_file_id=None,
+    telegram_message_id=None,
+    caption=None,
+    status=None
+    ):
+    database_write("""
+        INSERT INTO telegram_upload_logs (
+            family_id,
+            telegram_chat_id,
+            telegram_file_id,
+            telegram_message_id,
+            caption,
+            status
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        family_id,
+        str(telegram_chat_id),
+        telegram_file_id,
+        telegram_message_id,
+        caption,
+        status
+    ))

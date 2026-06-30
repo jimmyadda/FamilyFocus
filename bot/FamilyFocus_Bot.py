@@ -1,8 +1,9 @@
-import os
+API_BASE_URLimport os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
 import requests
+from io import BytesIO
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -49,7 +50,77 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/registerfamily"
     )
 
+async def handle_photo(update, context):
+    message = update.message
+    chat_id = message.chat_id
 
+    if not message.photo:
+        return
+
+    await message.reply_text("📸 Photo received. Scanning...")
+
+    photo = message.photo[-1]
+    telegram_file = await context.bot.get_file(photo.file_id)
+
+    file_bytes = BytesIO()
+    await telegram_file.download_to_memory(out=file_bytes)
+    file_bytes.seek(0)
+
+    files = {
+        "photo": ("telegram_photo.jpg", file_bytes, "image/jpeg")
+    }
+
+    data = {
+        "telegram_chat_id": str(chat_id),
+        "telegram_file_id": photo.file_id,
+        "telegram_message_id": str(message.message_id),
+        "caption": message.caption or ""
+    }
+
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/api/telegram/upload-photo",
+            data=data,
+            files=files,
+            timeout=120
+        )
+
+        result = response.json()
+
+    except Exception as e:
+        await message.reply_text(f"❌ Upload failed: {e}")
+        return
+
+    if not result.get("ok"):
+        await message.reply_text(
+            f"❌ Scan failed: {result.get('error', 'Unknown error')}"
+        )
+        return
+
+    scan = result.get("result", {})
+
+    confirmed_names = scan.get("confirmed_names", [])
+    possible_names = scan.get("possible_names", [])
+
+    confirmed_count = scan.get("confirmed_count", len(confirmed_names))
+    possible_count = scan.get("possible_count", len(possible_names))
+    skipped_count = scan.get("skipped_count", 0)
+
+    text = "✅ Scan complete\n\n"
+
+    if confirmed_count:
+        text += f"🟢 Confirmed: {', '.join(confirmed_names)}\n"
+
+    if possible_count:
+        text += f"🟡 Possible: {', '.join(possible_names)}\n"
+
+    if skipped_count:
+        text += f"⚪ Skipped faces: {skipped_count}\n"
+
+    if not confirmed_count and not possible_count and not skipped_count:
+        text += "No known family members detected."
+
+    await message.reply_text(text)
 
 
 async def register_family(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -193,6 +264,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     print("Family Focus Telegram Bot is running...")
     app.run_polling()
 

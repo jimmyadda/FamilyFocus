@@ -201,6 +201,117 @@
         flex-direction: column;
     }
 }
+
+.scan-summary {
+    max-width: 760px;
+    margin: 28px auto;
+}
+
+.scan-summary-card {
+    background: #ffffff;
+    border-radius: 28px;
+    padding: 28px;
+    box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+    border: 1px solid #e5e7eb;
+    text-align: center;
+}
+
+.summary-icon {
+    width: 54px;
+    height: 54px;
+    margin: 0 auto 12px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #f97316, #14b8a6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+}
+
+.scan-summary-card h3 {
+    font-size: 26px;
+    margin: 0 0 22px;
+    color: #0f172a;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 24px;
+}
+
+.summary-item {
+    text-decoration: none;
+    border-radius: 20px;
+    padding: 18px 12px;
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    color: #0f172a;
+    transition: 0.2s ease;
+}
+
+.summary-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.12);
+}
+
+.summary-item strong {
+    display: block;
+    font-size: 30px;
+    line-height: 1;
+    margin-bottom: 8px;
+}
+
+.summary-item span {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.summary-item.confirmed strong {
+    color: #16a34a;
+}
+
+.summary-item.possible strong {
+    color: #f97316;
+}
+
+.summary-item.skipped strong {
+    color: #64748b;
+}
+
+.summary-members {
+    border-top: 1px solid #e5e7eb;
+    padding-top: 20px;
+}
+
+.summary-label {
+    font-weight: 800;
+    color: #475569;
+    margin-bottom: 12px;
+}
+
+.member-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+}
+
+.member-chip {
+    text-decoration: none;
+    padding: 10px 16px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #fff7ed, #ccfbf1);
+    color: #0f172a;
+    font-weight: 800;
+    border: 1px solid #fed7aa;
+}
+
+.member-chip:hover {
+    background: linear-gradient(135deg, #f97316, #14b8a6);
+    color: white;
+}
 </style>
 
 <div class="upload-page-v2">
@@ -235,10 +346,13 @@
 </div>
 
 <div id="uploadQueue" class="upload-queue"></div>
-
+<div id="scanSummary" class="scan-summary" style="display:none;"></div>
 <div class="upload-actions">
-    <a id="viewResultsBtn" class="view-results-btn" href="{{ url_for('family_album') }}">
-        View results
+    <a id="viewResultsBtn"
+       class="view-results-btn"
+       href="{{ url_for('family_album') }}"
+       style="display:none;">
+        View Family Album
     </a>
 </div>
 ```
@@ -293,26 +407,23 @@ function setCardStatus(ui, status, percent, text) {
 
 input.addEventListener("change", async function () {
     queue.innerHTML = "";
+    scanSummary.style.display = "none";
+    scanSummary.innerHTML = "";
+
     viewResultsBtn.classList.remove("show");
 
-    const files = Array.from(input.files);
+    const files = Array.from(input.files || []);
 
-    const jobs = files.map(file => {
-        const ui = createUploadCard(file);
-        setCardStatus(ui, "waiting", 0, "Waiting...");
-        return { file, ui };
-    });
-
-    for (const job of jobs) {
-        try {
-            await uploadAndScanFile(job.file, job.ui);
-        } catch (err) {
-            console.error(err);
-            setCardStatus(job.ui, "failed", 100, "Failed");
-        }
+    if (!files.length) {
+        return;
     }
+
+    await uploadAndScanAllFiles(files);
+
     viewResultsBtn.classList.add("show");
-    //window.location.href = "{{ url_for('family_album') }}";
+
+    // optional auto redirect:
+    // window.location.href = "{{ url_for('family_album') }}";
 });
 
 function uploadAndScanFile(file, ui) {
@@ -358,21 +469,42 @@ function uploadAndScanFile(file, ui) {
                 return;
             }
 
-            const status = response.result.status;
-            const names = response.result.names || [];
-            const namesText = names.length ? ` (${names.join(", ")})` : "";
+            const result = response.result || {};
 
-            if (status === "matched") {
-                setCardStatus(ui, "done", 100, `✓ Matched${namesText}`);
-            } else if (status === "possible") {
-                setCardStatus(ui, "done", 100, `✓ Possible${namesText}`);
-            } else if (status === "skipped") {
-                setCardStatus(ui, "done", 100, "✓ Review");
-            } else {
-                setCardStatus(ui, "done", 100, "✓ Done");
+            const confirmedNames = result.confirmed_names || [];
+            const possibleNames = result.possible_names || [];
+
+            const confirmedCount = result.confirmed_count || confirmedNames.length || 0;
+            const possibleCount = result.possible_count || possibleNames.length || 0;
+            const skippedCount = result.skipped_count || 0;
+
+            let details = [];
+
+            if (confirmedCount > 0) {
+                details.push(`✓ Confirmed: ${confirmedNames.join(", ")}`);
             }
 
-            resolve(response);
+            if (possibleCount > 0) {
+                details.push(`? Possible: ${possibleNames.join(", ")}`);
+            }
+
+            if (skippedCount > 0) {
+                details.push(`${skippedCount} skipped`);
+            }
+
+            if (details.length === 0) {
+                details.push("✓ Done");
+            }
+
+            setCardStatus(ui, "done", 100, details.join(" | "));
+
+            resolve({
+                confirmedCount,
+                possibleCount,
+                skippedCount,
+                confirmedNames,
+                possibleNames
+            });
         };
 
         xhr.onerror = function () {
@@ -386,6 +518,90 @@ function uploadAndScanFile(file, ui) {
 
         xhr.send(formData);
     });
+}
+
+
+
+async function uploadAndScanAllFiles(files) {
+    const summaryEl = document.getElementById("scanSummary");
+    const viewBtn = document.getElementById("viewResultsBtn");
+
+    let totalConfirmed = 0;
+    let totalPossible = 0;
+    let totalSkipped = 0;
+
+    let allConfirmedNames = [];
+    let allPossibleNames = [];
+
+    summaryEl.style.display = "none";
+    viewBtn.style.display = "none";
+
+    for (const file of files) {
+        const ui = createUploadCard(file);
+
+        try {
+            const result = await uploadAndScanFile(file, ui);
+
+            if (result.confirmedCount > 0) {
+                totalConfirmed += 1;
+            } else if (result.possibleCount > 0) {
+                totalPossible += 1;
+            } else {
+                totalSkipped += 1;
+            }
+
+            allConfirmedNames.push(...result.confirmedNames);
+            allPossibleNames.push(...result.possibleNames);
+
+        } catch (err) {
+            totalSkipped += 1;
+        }
+    }
+
+    const uniqueConfirmed = [...new Set(allConfirmedNames)];
+    const uniquePossible = [...new Set(allPossibleNames)];
+
+    summaryEl.innerHTML = `
+        <div class="scan-summary-card">
+            <div class="summary-icon">✅</div>
+
+            <h3>Upload complete</h3>
+
+            <div class="summary-grid">
+                <a class="summary-item confirmed" href="{{ url_for('family_album') }}">
+                    <strong>${totalConfirmed}</strong>
+                    <span>confirmed photos</span>
+                </a>
+
+                <a class="summary-item possible" href="{{ url_for('review_page') }}">
+                    <strong>${totalPossible}</strong>
+                    <span>possible sent to review</span>
+                </a>
+
+                <a class="summary-item skipped" href="{{ url_for('review_page') }}">
+                    <strong>${totalSkipped}</strong>
+                    <span>skipped sent to review</span>
+                </a>
+            </div>
+
+            ${uniqueConfirmed.length ? `
+                <div class="summary-members">
+                    <div class="summary-label">Confirmed family members</div>
+                    <div class="member-chip-row">
+                        ${uniqueConfirmed.map(name => `
+                            <a class="member-chip"
+                            href="/member-by-name/${encodeURIComponent(name)}/album">
+                                ${name}
+                            </a>
+                        `).join("")}
+                    </div>
+                </div>
+            ` : ""}
+        </div>
+    `;
+
+    summaryEl.style.display = "block";
+    viewBtn.style.display = "inline-flex";
 }
 </script>
 

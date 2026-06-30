@@ -155,9 +155,9 @@ def get_all_family_embeddings():
 
     return family_embeddings
 
-def image_contains_known_family(image_path, family_embeddings, DeepFace):
+def image_contains_known_family(image_path, family_embeddings, DeepFace, family_id):
     image = cv2.imread(str(image_path))
-    family_id = get_current_family_id()
+    #family_id = get_current_family_id()
     possible_facedir = get_family_possible_faces_dir(family_id)
     if image is None:
         print("Could not read image:", image_path)
@@ -465,14 +465,20 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     encrypted_embedding = encrypt_embedding(embedding)
     database_write(
         """
-        INSERT INTO member_embeddings (family_id,member_id, photo_id, embedding)
-        VALUES (?, ?, ?, ?)
+            INSERT INTO member_embeddings (
+                family_id,
+                member_id,
+                photo_id,
+                embedding,
+                embedding_encrypted
+            )
+            VALUES (?, ?, ?, ?, ?)
         """,
         (
             family_id,
             member_id,
             photo_id,
-            json.dumps(encrypted_embedding)
+            json.dumps(encrypted_embedding),None
         )
     )
 
@@ -816,6 +822,18 @@ def member_page(member_id):
         deepface_available=DeepFace is not None
     )
 
+@app.route("/member-by-name/<member_name>/album")
+@login_required
+def member_album_by_name(member_name):
+    family_id = get_current_family_id()
+    member_id = get_member_id_by_name(member_name, family_id)
+
+    if not member_id:
+        flash("Family member not found.")
+        return redirect(url_for("family_album"))
+
+    return redirect(url_for("member_album", member_id=member_id))
+
 # album - new focus
 
 @app.route("/album")
@@ -1145,15 +1163,21 @@ def rebuild_embeddings(member_id):
             encrypted_embedding = encrypt_embedding(embedding)
             database_write(
                 """
-                INSERT INTO member_embeddings
-                (family_id,member_id, photo_id, embedding)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO member_embeddings (
+                    family_id,
+                    member_id,
+                    photo_id,
+                    embedding,
+                    embedding_encrypted
+                )
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     family_id,
                     member_id,
                     photo["id"],
-                    encrypted_embedding
+                    encrypted_embedding,
+                    None
                 )
             )
 
@@ -1845,7 +1869,7 @@ def serve_album_file(photo_id):
 # Upload photos from mobile app
 # -------------------------
 
-def scan_one_family_photo(file, family_id, family_embeddings):
+def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
     possible_faces_dir = get_family_possible_dir(family_id)
     skipped_dir = get_family_skipped_dir(family_id)
     incoming_dir = get_incoming_upload_dir(family_id)
@@ -1866,7 +1890,8 @@ def scan_one_family_photo(file, family_id, family_embeddings):
     found, matched_names, matches, possible_names, possible_matches = image_contains_known_family(
         incoming_path,
         family_embeddings,
-        DeepFace
+        DeepFace,
+        family_id
     )
 
     if found:
@@ -1883,7 +1908,7 @@ def scan_one_family_photo(file, family_id, family_embeddings):
             family_id=family_id,
             file_path=result_path,
             original_filename=file.filename,
-            source="web"
+            source=source
         )
 
         for match in matches:
@@ -1911,6 +1936,14 @@ def scan_one_family_photo(file, family_id, family_embeddings):
             "status": "matched",
             "filename": filename,
             "original": original,
+
+            "confirmed_count": len(matched_names),
+            "possible_count": 0,
+            "skipped_count": 0,
+
+            "confirmed_names": matched_names,
+            "possible_names": [],
+
             "names": matched_names,
             "matches": matches,
             "path": url_for("serve_result_file", filename=filename)
@@ -1929,7 +1962,7 @@ def scan_one_family_photo(file, family_id, family_embeddings):
             family_id=family_id,
             file_path=possible_path,
             original_filename=file.filename,
-            source="web"
+            source=source
         )
 
         for match in possible_matches:
@@ -1957,6 +1990,14 @@ def scan_one_family_photo(file, family_id, family_embeddings):
             "status": "possible",
             "filename": filename,
             "original": original,
+
+            "confirmed_count": 0,
+            "possible_count": len(possible_names),
+            "skipped_count": 0,
+
+            "confirmed_names": [],
+            "possible_names": possible_names,
+
             "names": possible_names,
             "matches": possible_matches,
             "path": url_for("serve_possible_file", filename=filename)
@@ -1996,7 +2037,14 @@ def scan_one_family_photo(file, family_id, family_embeddings):
     return {
         "status": "skipped",
         "filename": filename,
-        "original": original
+        "original": original,
+
+        "confirmed_count": 0,
+        "possible_count": 0,
+        "skipped_count": len(unknown_faces),
+
+        "confirmed_names": [],
+        "possible_names": []
     }
 
 
@@ -2018,11 +2066,11 @@ def scan_one_photo_ajax():
     return jsonify({
         "ok": True,
         "result": result
-    }) 
+    })
 
 
 # -------------------------
-# Telegram API
+# Telegram APIS
 # -------------------------
 @app.route("/api/telegram/status", methods=["POST"])
 def api_telegram_status():
@@ -2121,10 +2169,8 @@ def telegram_connect():
     return redirect(
         f"https://t.me/{bot_username}?start=link_{token}"
     )
-
     
 # telegram registration request approval/rejection
-
 
 @app.route("/admin/telegram-requests/<int:request_id>/approve", methods=["POST"])
 @login_required
@@ -2241,6 +2287,60 @@ def reject_telegram_request(request_id):
     flash("Telegram registration rejected.", "warning")
     return redirect(url_for("telegram_requests_admin"))
 
+# upload photos from telegram bot
+@app.route("/api/telegram/upload-photo", methods=["POST"])
+def telegram_upload_photo():
+    telegram_chat_id = request.form.get("telegram_chat_id")
+    telegram_file_id = request.form.get("telegram_file_id")
+    telegram_message_id = request.form.get("telegram_message_id")
+    caption = request.form.get("caption", "")
+
+    if not telegram_chat_id:
+        return jsonify({"ok": False, "error": "Missing telegram_chat_id"}), 400
+
+    if "photo" not in request.files:
+        return jsonify({"ok": False, "error": "Missing photo"}), 400
+
+    user = get_user_by_telegram_chat_id(str(telegram_chat_id))
+
+    print("TELEGRAM USER:", dict(user) if user else None)
+
+    if not user:
+        return jsonify({
+            "ok": False,
+            "error": "Telegram account is not linked. Open the dashboard and connect Telegram first."
+        }), 403
+
+    family_id = user["family_id"]
+
+    if not family_id:
+        return jsonify({
+            "ok": False,
+            "error": "Linked Telegram user has no family_id"
+        }), 403
+
+    family_embeddings = get_all_family_embeddings_for_family(family_id)
+
+    result = scan_one_family_photo(
+        request.files["photo"],
+        family_id,
+        family_embeddings,
+        source="telegram"
+    )
+
+    save_telegram_upload_log(
+        family_id=family_id,
+        telegram_chat_id=str(telegram_chat_id),
+        telegram_file_id=telegram_file_id,
+        telegram_message_id=telegram_message_id,
+        caption=caption,
+        status=result.get("status")
+    )
+
+    return jsonify({
+        "ok": True,
+        "result": result
+    })
 
 
 #-------------------------
