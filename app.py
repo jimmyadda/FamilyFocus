@@ -54,7 +54,10 @@ from face_utils import (
 )
 from dotenv import load_dotenv
 import os
-from security_utils import decrypt_embedding,encrypt_embedding
+from security_utils import (
+    decrypt_embedding,encrypt_embedding,
+    sign_telegram_album_token, verify_telegram_album_token
+    )
 from db_helpers import (
     get_family_profiles_dir,
     get_incoming_upload_dir,
@@ -403,9 +406,9 @@ def get_member_id_by_name(name, family_id):
     return rows[0]["id"]
 
 def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
-    member = get_member_by_name(member_name)
     family_id = get_current_family_id()
-    profiles_dir = get_family_profiles_dir(family_id)
+    member = get_member_by_name(member_name)
+
     if not member:
         print("Member not found:", member_name)
         return False
@@ -418,7 +421,6 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
         print("Could not create embedding from accepted face")
         return False
 
-    # Safety check before learning
     current_embeddings = get_all_family_embeddings()
 
     check_name, check_distance, check_status = identify_face(
@@ -436,9 +438,12 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     )
 
     if check_distance > 0.55:
-        print("Learning rejected - face too far from profile")
-        return False
+        print(
+            f"Manual learning warning: face is far from existing profile "
+            f"({check_distance:.4f}), but user selected {member_name}. Learning anyway."
+        )
 
+    profiles_dir = get_family_profiles_dir(family_id)
     member_profile_dir = profiles_dir / str(member_id)
     member_profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -450,35 +455,50 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     profile_path = member_profile_dir / profile_filename
 
     shutil.copy(str(face_crop_path), str(profile_path))
-    
-    
-    family_id = get_current_family_id()
+
     database_write(
         """
-        INSERT INTO member_photos (family_id,member_id, file_path)
+        INSERT INTO member_photos (family_id, member_id, file_path)
         VALUES (?, ?, ?)
         """,
-        (family_id,member_id, str(profile_path))
+        (family_id, member_id, str(profile_path))
     )
 
-    photo_id = database_read("SELECT last_insert_rowid() AS id")[0]["id"]
+    photo_row = database_read(
+        """
+        SELECT id
+        FROM member_photos
+        WHERE family_id = ?
+          AND member_id = ?
+          AND file_path = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (family_id, member_id, str(profile_path)),
+        one=True
+    )
+
+    photo_id = photo_row["id"]
+
     encrypted_embedding = encrypt_embedding(embedding)
+
     database_write(
         """
-            INSERT INTO member_embeddings (
-                family_id,
-                member_id,
-                photo_id,
-                embedding,
-                embedding_encrypted
-            )
-            VALUES (?, ?, ?, ?, ?)
+        INSERT INTO member_embeddings (
+            family_id,
+            member_id,
+            photo_id,
+            embedding,
+            embedding_encrypted
+        )
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             family_id,
             member_id,
             photo_id,
-            json.dumps(encrypted_embedding),None
+            None,
+            encrypted_embedding
         )
     )
 
@@ -1727,35 +1747,42 @@ def delete_review(review_id):
 def review_face(review_id):
     family_id = get_current_family_id()
     reviewed_member_id = request.form.get("member_id", type=int)
+
+    if not reviewed_member_id:
+        return jsonify({"success": False, "error": "Missing member_id"}), 400
+
     skipped_dir = get_family_skipped_dir(family_id)
     results_dir = get_family_results_dir(family_id)
-    review = database_read("""
+
+    review = database_read(
+        """
         SELECT *
         FROM learning_reviews
         WHERE id = ?
           AND family_id = ?
-    """, (review_id, family_id))
+        """,
+        (review_id, family_id),
+        one=True
+    )
 
     if not review:
-        flash("Review item not found.")
-        return redirect(url_for("review_page"))
+        return jsonify({"success": False, "error": "Review item not found"}), 404
 
-    review = review[0]
-
-    member = database_read("""
+    member = database_read(
+        """
         SELECT *
         FROM family_members
         WHERE id = ?
           AND family_id = ?
-    """, (reviewed_member_id, family_id))
+        """,
+        (reviewed_member_id, family_id),
+        one=True
+    )
 
     if not member:
-        flash("Member not found.")
-        return redirect(url_for("review_page"))
+        return jsonify({"success": False, "error": "Member not found"}), 404
 
-    member = member[0]
-
-    skipped_filename = review["photo_path"].replace("skipped/", "")
+    skipped_filename = Path(review["photo_path"]).name
     skipped_path = skipped_dir / skipped_filename
     result_path = results_dir / skipped_filename
 
@@ -1782,23 +1809,32 @@ def review_face(review_id):
         confirmed_by_user=1
     )
 
+    learned = False
+
     if review["face_crop_path"] and Path(review["face_crop_path"]).exists():
-        save_accepted_face_embedding(
+        learned = save_accepted_face_embedding(
             member["name"],
             review["face_crop_path"],
             DeepFace
         )
 
-    database_write("""
+    database_write(
+        """
         UPDATE learning_reviews
         SET reviewed_member_id = ?,
             action = 'resolved'
         WHERE id = ?
           AND family_id = ?
-    """, (reviewed_member_id, review_id, family_id))
+        """,
+        (reviewed_member_id, review_id, family_id)
+    )
 
-    flash(f"Saved as {member['name']}.")
-    return redirect(url_for("review_page"))
+    return jsonify({
+        "success": True,
+        "member_name": member["name"],
+        "learned": learned
+    })
+
 
 @app.route("/rescan-skipped")
 def rescan_skipped():
@@ -1893,7 +1929,8 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
         DeepFace,
         family_id
     )
-
+    print("MATCHES:", matches)
+    print("POSSIBLE MATCHES:", possible_matches)
     if found:
         results_dir = get_family_results_dir(family_id)
         result_path = results_dir / filename
@@ -1969,9 +2006,11 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
             name = match.get("name")
             distance = match.get("distance")
             member_id = get_member_id_by_name(name, family_id)
+            
+
 
             if member_id:
-                create_photo_detection(
+                detection_id = create_photo_detection(
                     family_id=family_id,
                     photo_id=photo_id,
                     member_id=member_id,
@@ -1981,24 +2020,49 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
                     confirmed_by_user=0
                 )
 
+                saved_detection = database_read(
+                    """
+                    SELECT status
+                    FROM photo_detections
+                    WHERE id = ?
+                    AND family_id = ?
+                    """,
+                    (detection_id, family_id),
+                    one=True
+                )
+
+                saved_status = saved_detection["status"] if saved_detection else "unknown"
+
+                match["saved_status"] = saved_status
+
         try:
             incoming_path.unlink()
         except Exception:
             pass
+        visible_possible_matches = [
+            m for m in possible_matches
+            if m.get("saved_status") == "possible"
+        ]
 
+        rejected_matches = [
+            m for m in possible_matches
+            if m.get("saved_status") == "rejected"
+        ]
         return {
-            "status": "possible",
+            "status": "possible" if visible_possible_matches else "already_rejected",
             "filename": filename,
             "original": original,
 
             "confirmed_count": 0,
-            "possible_count": len(possible_names),
+            "possible_count": len(visible_possible_matches),
+            "rejected_count": len(rejected_matches),
             "skipped_count": 0,
 
             "confirmed_names": [],
-            "possible_names": possible_names,
+            "possible_names": [m.get("name") for m in visible_possible_matches],
+            "rejected_names": [m.get("name") for m in rejected_matches],
 
-            "names": possible_names,
+            "names": [m.get("name") for m in visible_possible_matches],
             "matches": possible_matches,
             "path": url_for("serve_possible_file", filename=filename)
         }
@@ -2072,6 +2136,50 @@ def scan_one_photo_ajax():
 # -------------------------
 # Telegram APIS
 # -------------------------
+
+@app.route("/api/telegram/connection-status", methods=["POST"])
+def api_telegram_connection_status():
+    data = request.get_json(silent=True) or {}
+
+    chat_id = str(data.get("telegram_chat_id", "")).strip()
+
+    if not chat_id:
+        return jsonify({
+            "linked": False,
+            "error": "missing telegram_chat_id"
+        }), 400
+
+    user = database_read(
+        """
+        SELECT
+            u.id,
+            u.family_id,
+            u.first_name,
+            u.last_name,
+            f.family_name
+        FROM users u
+        JOIN families f
+            ON f.id = u.family_id
+        WHERE u.telegram_chat_id = ?
+          AND u.is_active = 1
+        LIMIT 1
+        """,
+        (chat_id,),
+        one=True,
+    )
+
+    if not user:
+        return jsonify({
+            "linked": False
+        })
+
+    return jsonify({
+        "linked": True,
+        "family_id": user["family_id"],
+        "family_name": user["family_name"],
+        "user_name": f'{user["first_name"] or ""} {user["last_name"] or ""}'.strip()
+    })
+
 @app.route("/api/telegram/status", methods=["POST"])
 def api_telegram_status():
     data = request.get_json(silent=True) or {}
@@ -2328,6 +2436,17 @@ def telegram_upload_photo():
         source="telegram"
     )
 
+    token = sign_telegram_album_token(
+        family_id=family_id,
+        telegram_chat_id=telegram_chat_id
+    )
+
+    album_url = url_for(
+        "telegram_album_login",
+        token=token,
+        _external=True
+    )
+
     save_telegram_upload_log(
         family_id=family_id,
         telegram_chat_id=str(telegram_chat_id),
@@ -2339,9 +2458,29 @@ def telegram_upload_photo():
 
     return jsonify({
         "ok": True,
-        "result": result
+        "result": result,
+        "album_url": album_url
     })
 
+@app.route("/telegram/album/<token>")
+def telegram_album_login(token):
+    data = verify_telegram_album_token(token, max_age=600)
+
+    family_id = data["family_id"]
+    telegram_chat_id = str(data["telegram_chat_id"])
+
+    user = get_user_by_telegram_chat_id(telegram_chat_id)
+
+    if not user or user["family_id"] != family_id:
+        abort(403)
+
+    session.clear()
+    session["user_id"] = user["id"]
+    session["family_id"] = family_id
+    session["email"] = user["email"]
+    session["login_source"] = "telegram_signed_link"
+
+    return redirect(url_for("family_album"))
 
 #-------------------------
 # Run app

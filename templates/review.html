@@ -289,6 +289,7 @@ Review Faces
                         <div class="album-review-actions">
 
                             <form
+                                class="confirm-detection-form"
                                 method="POST"
                                 action="{{ url_for('confirm_detection', detection_id=item.detection_id) }}">
                                 <button type="submit" class="yes-btn">
@@ -380,7 +381,7 @@ document.querySelectorAll(".review-card").forEach(card => {
     rejectDetection(detectionId);
 }
 
-function deleteLearningReviewCard(event, btn) {
+ function deleteLearningReviewCard(event, btn) {
     if (!confirm("Delete this photo from review?")) {
         return;
     }
@@ -435,6 +436,39 @@ document.querySelectorAll(".delete-photo-form").forEach(form => {
     });
 });
 
+ <!-- Add event listener to confirm detection forms -->
+ document.querySelectorAll(".confirm-detection-form").forEach(form => {
+    form.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const card = form.closest(".album-review-card");
+
+        try {
+            const response = await fetch(form.action, {
+                method: "POST"
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                if (card) {
+                    card.style.transition = "opacity .25s ease, transform .25s ease";
+                    card.style.opacity = "0";
+                    card.style.transform = "scale(.96)";
+
+                    setTimeout(() => card.remove(), 250);
+                }
+            } else {
+                alert(data.message || "Could not confirm detection.");
+            }
+
+        } catch (err) {
+            console.error(err);
+            alert("Confirm failed.");
+        }
+    });
+});
 
 </script>
 

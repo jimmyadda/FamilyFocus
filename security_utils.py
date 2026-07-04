@@ -110,3 +110,19 @@ def safe_delete_file(path):
         print("DELETE FILE ERROR:", e)
 
     return False    
+
+def sign_telegram_album_token(family_id, telegram_chat_id):
+    return get_serializer().dumps({
+        "family_id": family_id,
+        "telegram_chat_id": str(telegram_chat_id),
+        "type": "telegram_album"
+    })
+
+
+def verify_telegram_album_token(token, max_age=600):
+    data = get_serializer().loads(token, max_age=max_age)
+
+    if data.get("type") != "telegram_album":
+        abort(403)
+
+    return data
