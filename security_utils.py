@@ -6,6 +6,10 @@ from PIL import Image, ImageOps
 import filetype
 from cryptography.fernet import Fernet
 import json
+import jwt
+from datetime import datetime, timedelta, timezone
+from functools import wraps
+
 
 SAFE_FILENAME_RE = re.compile(r"^[a-f0-9]{32}\.(jpg|jpeg|png|webp)$", re.I)
 MAX_UPLOAD_SIZE = 25 * 1024 * 1024  # 25MB
@@ -126,3 +130,4 @@ def verify_telegram_album_token(token, max_age=600):
         abort(403)
 
     return data
+

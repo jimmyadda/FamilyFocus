@@ -7,6 +7,8 @@ from pathlib import Path
 import cv2
 from db_helpers import *
 from functools import wraps  
+import jwt
+from datetime import datetime, timedelta, timezone
 import numpy as np
 from flask import (
     abort, send_file,
@@ -84,13 +86,26 @@ app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 ensure_app_dirs()
 
+app.config["JWT_SECRET_KEY"] = os.environ.get(
+    "JWT_SECRET_KEY",
+    app.config["SECRET_KEY"]
+)
+
+
+
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
 EMBEDDING_ENCRYPTION_KEY = os.getenv(
     "EMBEDDING_ENCRYPTION_KEY"
 )
 app.config["EMBEDDING_ENCRYPTION_KEY"] = EMBEDDING_ENCRYPTION_KEY
 
+from routes.api_auth import api_auth_bp
+
+app.register_blueprint(api_auth_bp)
+
 CLIENT_ID = os.getenv("CLIENT_ID", "adda")
+ # Mobile app JWT token creation and verification
+
 
 # -------------------------
 # General helpers
@@ -2811,7 +2826,6 @@ def telegram_upload_member_photo():
         return jsonify(result), 400
 
     return jsonify(result)
-
 
 
 #-------------------------
