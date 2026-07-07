@@ -4,8 +4,12 @@ import hashlib
 import secrets
 from flask import session, abort
 import shutil
+import uuid
+from werkzeug.utils import secure_filename
 from pathlib import Path
 import json
+import numpy as np
+from security_utils import encrypt_embedding, decrypt_embedding
 from config import (
     DB_PATH,
     FAMILIES_DIR,
@@ -340,7 +344,8 @@ def init_db():
     add_column_if_missing("learning_reviews", "image_w", "INTEGER")
     add_column_if_missing("learning_reviews", "image_h", "INTEGER")
 
-
+    add_column_if_missing("family_members", "centroid", "TEXT")
+    add_column_if_missing("family_members", "centroid_encrypted", "TEXT")
     families = database_read("SELECT id, client_id, storage_key FROM families")
     for family in families:
         if not family["storage_key"]:
@@ -572,6 +577,56 @@ def get_family_possible_dir(family_id):
 def get_family_possible_faces_dir(family_id):
     return get_family_base_dir(family_id) / "possible_faces"
 
+
+
+
+def get_member_embeddings(member_id):
+    rows = database_read("""
+        SELECT embedding, embedding_encrypted
+        FROM member_embeddings
+        WHERE member_id = ?
+    """, (member_id,))
+
+    embeddings = []
+
+    for row in rows:
+        emb = None
+
+        if row.get("embedding_encrypted"):
+            emb = decrypt_embedding(row["embedding_encrypted"])
+
+        elif row.get("embedding"):
+            emb = json.loads(row["embedding"])
+
+        if emb:
+            embeddings.append(np.array(emb, dtype=np.float32))
+
+    return embeddings
+
+
+def rebuild_member_centroid(member_id):
+    embeddings = get_member_embeddings(member_id)
+
+    if not embeddings:
+        print(f"No embeddings found for member_id={member_id}")
+        return False
+
+    centroid = np.mean(embeddings, axis=0)
+    centroid_list = centroid.tolist()
+
+    centroid_json = json.dumps(centroid_list)
+    centroid_encrypted = encrypt_embedding(centroid_list)
+
+    database_write("""
+        UPDATE family_members
+        SET centroid = ?, centroid_encrypted = ?
+        WHERE id = ?
+    """, (centroid_json, centroid_encrypted, member_id))
+
+    print(f"Rebuilt centroid for member_id={member_id} using {len(embeddings)} embeddings")
+    return True
+
+
 def get_family_skipped_dir(family_id):
     return get_family_base_dir(family_id) / "skipped"
 
@@ -594,8 +649,6 @@ def ensure_family_dirs(family_id):
 def ensure_app_dirs():
     FAMILIES_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-
 
 def seed_family_members():
     family_id = create_default_family()
@@ -685,8 +738,6 @@ def assign_existing_data_to_family(family_id):
         SET family_id = ?
         WHERE family_id IS NULL
     """, (family_id,))
-
-
 
 def get_confirmed_family_photos(family_id):
     return database_read(
@@ -993,7 +1044,6 @@ def get_current_user():
 
 
 # Telegram related helpers
-
 def get_user_by_telegram_chat_id(telegram_chat_id):
     return database_read("""
         SELECT 
@@ -1022,6 +1072,8 @@ def get_all_family_embeddings_for_family(family_id):
         WHERE me.family_id = ?
           AND fm.family_id = ?
     """, (family_id, family_id))
+    print("LOADED EMBEDDINGS:", len(rows))
+
 
     family_embeddings = []
 
@@ -1065,3 +1117,197 @@ def save_telegram_upload_log(
         caption,
         status
     ))
+
+def save_telegram_member_profile_photo(family_id, member_id, photo_file):
+    profile_dir = get_family_profiles_dir(family_id)
+
+    member = database_read(
+        """
+        SELECT *
+        FROM family_members
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (member_id, family_id),
+        one=True
+    )
+
+    if not member:
+        return {
+            "ok": False,
+            "error": "Family member not found."
+        }
+
+    if not photo_file or photo_file.filename == "":
+        return {
+            "ok": False,
+            "error": "No photo received."
+        }
+
+    original = secure_filename(photo_file.filename or "telegram_profile.jpg")
+
+    if "." in original:
+        ext = original.rsplit(".", 1)[1].lower()
+    else:
+        ext = "jpg"
+
+    if ext not in ["jpg", "jpeg", "png", "webp"]:
+        ext = "jpg"
+
+    member_dir = profile_dir / str(member_id)
+    member_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{uuid.uuid4()}.{ext}"
+    save_path = member_dir / filename
+
+    photo_file.save(save_path)
+
+    database_write(
+        """
+        INSERT INTO member_photos (family_id, member_id, file_path)
+        VALUES (?, ?, ?)
+        """,
+        (family_id, member_id, str(save_path).replace("\\", "/"))
+    )
+
+    photo_row = database_read(
+        """
+        SELECT id
+        FROM member_photos
+        WHERE family_id = ?
+          AND member_id = ?
+          AND file_path = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (family_id, member_id, str(save_path).replace("\\", "/")),
+        one=True
+    )
+
+    return {
+        "ok": True,
+        "message": f"Profile photo added for {member['name']}",
+        "member_name": member["name"],
+        "file_path": str(save_path).replace("\\", "/"),
+        "photo_id": photo_row["id"] if photo_row else None
+    }
+
+def get_family_members_by_telegram_chat_id(telegram_chat_id):
+    rows = database_read(
+        """
+        SELECT family_id
+        FROM users
+        WHERE telegram_chat_id = ?
+          AND is_active = 1
+        """,
+        (str(telegram_chat_id),),
+        one=True
+    )
+
+    if not rows:
+        return None
+
+    family_id = rows["family_id"]
+
+    members = database_read(
+        """
+        SELECT id, name
+        FROM family_members
+        WHERE family_id = ?
+        ORDER BY name ASC
+        """,
+        (family_id,)
+    )
+
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"]
+        }
+        for row in members
+    ]    
+
+def get_owned_member_for_family(member_id, family_id):
+    return database_read(
+        """
+        SELECT id, name, family_id
+        FROM family_members
+        WHERE id = ?
+          AND family_id = ?
+        """,
+        (member_id, family_id),
+        one=True
+    )    
+
+def create_member_embedding_from_profile_photo(family_id, member_id, photo_path, DeepFace):
+    embedding = represent_face(photo_path, DeepFace)
+
+    if embedding is None:
+        print("Could not create embedding from Telegram profile photo")
+        return False
+
+    photo_row = database_read(
+        """
+        SELECT id
+        FROM member_photos
+        WHERE family_id = ?
+          AND member_id = ?
+          AND file_path = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (family_id, member_id, str(photo_path)),
+        one=True
+    )
+
+    if not photo_row:
+        print("Could not find member_photo row for embedding")
+        return False
+
+    photo_id = photo_row["id"]
+
+    encrypted_embedding = encrypt_embedding(embedding)
+
+    database_write(
+        """
+        INSERT INTO member_embeddings (
+            family_id,
+            member_id,
+            photo_id,
+            embedding,
+            embedding_encrypted
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            family_id,
+            member_id,
+            photo_id,
+            None,
+            encrypted_embedding
+        )
+    )
+
+    print(f"Created embedding for member_id={member_id}")
+    return True    
+
+def insert_member_embedding(family_id, member_id, photo_id, encrypted_embedding):
+    database_write(
+        """
+        INSERT INTO member_embeddings (
+            family_id,
+            member_id,
+            photo_id,
+            embedding,
+            embedding_encrypted
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            family_id,
+            member_id,
+            photo_id,
+            None,
+            encrypted_embedding
+        )
+    )    

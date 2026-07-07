@@ -88,6 +88,7 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
 EMBEDDING_ENCRYPTION_KEY = os.getenv(
     "EMBEDDING_ENCRYPTION_KEY"
 )
+app.config["EMBEDDING_ENCRYPTION_KEY"] = EMBEDDING_ENCRYPTION_KEY
 
 CLIENT_ID = os.getenv("CLIENT_ID", "adda")
 
@@ -405,7 +406,7 @@ def get_member_id_by_name(name, family_id):
 
     return rows[0]["id"]
 
-def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
+def save_accepted_face_embedding(member_name, face_crop_path, DeepFace, original_photo_path=None):
     family_id = get_current_family_id()
     member = get_member_by_name(member_name)
 
@@ -418,7 +419,9 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
     embedding = represent_face(face_crop_path, DeepFace)
 
     if embedding is None:
-        print("Could not create embedding from accepted face")
+        print("LEARN: represent_face returned None")
+        print("LEARN face_crop_path:", face_crop_path)
+        print("LEARN exists:", Path(face_crop_path).exists())
         return False
 
     current_embeddings = get_all_family_embeddings()
@@ -437,6 +440,8 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
         f"status={check_status}"
     )
 
+
+
     if check_distance > 0.55:
         print(
             f"Manual learning warning: face is far from existing profile "
@@ -453,8 +458,9 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
 
     profile_filename = f"{uuid.uuid4()}{ext}"
     profile_path = member_profile_dir / profile_filename
-
-    shutil.copy(str(face_crop_path), str(profile_path))
+    
+    source_photo_path = original_photo_path if original_photo_path else face_crop_path
+    shutil.copy(str(source_photo_path), str(profile_path))
 
     database_write(
         """
@@ -502,9 +508,156 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace):
         )
     )
 
-    print(f"Learned new embedding for {member_name}")
+    print(f"LEARN: Learning completed for {member_name}")
     return True
 
+
+#-------------------------
+# recognition helpers
+#-------------------------
+def create_profile_embedding_from_saved_photo(family_id, member_id, photo_id, photo_path, DeepFace):
+    image = cv2.imread(str(photo_path))
+
+    if image is None:
+        print("PROFILE EMBEDDING: Could not read image:", photo_path)
+        return False
+
+    faces = detect_faces_with_opencv(
+        image,
+        min_face_size=MIN_FACE_SIZE_IMAGE
+    )
+
+    if len(faces) == 0:
+        print("PROFILE EMBEDDING: No face found")
+        return False
+
+    # Pick largest face
+    faces = sorted(faces, key=lambda box: box[2] * box[3], reverse=True)
+    best_face = faces[0]
+
+    face_crop = crop_face(image, best_face)
+
+    temp_dir = Path("instance/temp")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    face_crop_path = temp_dir / f"profile_face_{uuid.uuid4()}.jpg"
+    cv2.imwrite(str(face_crop_path), face_crop)
+
+    embedding = represent_face(face_crop_path, DeepFace)
+
+    if embedding is None:
+        print("PROFILE EMBEDDING: Could not create embedding")
+        return False
+
+    encrypted_embedding = encrypt_embedding(embedding)
+
+    insert_member_embedding(
+        family_id=family_id,
+        member_id=member_id,
+        photo_id=photo_id,
+        encrypted_embedding=encrypted_embedding
+    )
+    print("PROFILE EMBEDDING CREATED:", member_id)
+
+    rebuild_ok = rebuild_member_centroid(member_id)
+    print("PROFILE CENTROID REBUILT:", rebuild_ok)
+    return True
+
+def get_box_value(box, long_key, short_key):
+    return box.get(long_key, box.get(short_key))
+
+def box_iou(a, b):
+    ax1 = get_box_value(a, "x", "x")
+    ay1 = get_box_value(a, "y", "y")
+    aw = get_box_value(a, "width", "w")
+    ah = get_box_value(a, "height", "h")
+
+    bx1 = get_box_value(b, "x", "x")
+    by1 = get_box_value(b, "y", "y")
+    bw = get_box_value(b, "width", "w")
+    bh = get_box_value(b, "height", "h")
+
+    if None in [ax1, ay1, aw, ah, bx1, by1, bw, bh]:
+        return 0
+
+    ax2, ay2 = ax1 + aw, ay1 + ah
+    bx2, by2 = bx1 + bw, by1 + bh
+
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    intersection = iw * ih
+
+    area_a = aw * ah
+    area_b = bw * bh
+
+    union = area_a + area_b - intersection
+
+    if union == 0:
+        return 0
+
+    return intersection / union
+
+def save_unknown_faces_for_review(family_id, incoming_path, filename, known_matches, DeepFace):
+    skipped_dir = get_family_skipped_dir(family_id)
+    skipped_path = skipped_dir / filename
+
+    if not skipped_path.exists():
+        shutil.copy(str(incoming_path), str(skipped_path))
+    
+    unknown_faces = extract_faces_for_review(
+        incoming_path,
+        filename,
+        DeepFace
+    )
+
+    saved_unknown = 0
+
+    known_boxes = []
+
+    for match in known_matches:
+        box = match.get("box")
+        if box:
+            known_boxes.append(box)
+
+    for face in unknown_faces:
+        face_box = {
+            "x": face["box_x"],
+            "y": face["box_y"],
+            "width": face["box_w"],
+            "height": face["box_h"]
+        }
+
+        overlaps_known = False
+
+        for known_box in known_boxes:
+            if box_iou(face_box, known_box) > 0.35:
+                overlaps_known = True
+                break
+
+        if overlaps_known:
+            continue
+
+        save_learning_review(
+            family_id=family_id,
+            photo_path=f"skipped/{filename}",
+            face_crop_path=f"possible_faces/{face['face_crop_filename']}",
+            predicted_member_id=None,
+            reviewed_member_id=None,
+            distance=None,
+            action="unknown",
+            box_x=face["box_x"],
+            box_y=face["box_y"],
+            box_w=face["box_w"],
+            box_h=face["box_h"],
+            image_w=face["image_w"],
+            image_h=face["image_h"]
+        )
+
+        saved_unknown += 1
+
+    return saved_unknown    
 # -------------------------
 # User Login and Registration
 # -------------------------
@@ -973,8 +1126,6 @@ def reject_detection(detection_id):
 @app.route("/members/<int:member_id>/upload", methods=["POST"])
 @login_required
 def upload_member_photos(member_id):
-    print("UPLOAD ROUTE HIT")
-    print("CONTENT LENGTH:", request.content_length)
     family_id = get_current_family_id()
     profile_dir = get_family_profiles_dir(family_id)
     try:
@@ -1034,6 +1185,30 @@ def upload_member_photos(member_id):
             """,
             (family_id, member_id, str(save_path).replace("\\", "/"))
         )
+
+        photo_row = database_read(
+            """
+            SELECT id
+            FROM member_photos
+            WHERE family_id = ?
+            AND member_id = ?
+            AND file_path = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (family_id, member_id, str(save_path).replace("\\", "/")),
+            one=True
+        )
+
+        if photo_row:
+            learned = create_profile_embedding_from_saved_photo(
+                family_id=family_id,
+                member_id=member_id,
+                photo_id=photo_row["id"],
+                photo_path=str(save_path),
+                DeepFace=DeepFace
+            )
+            print("WEB PROFILE LEARNED:", learned)
 
         saved += 1
 
@@ -1811,12 +1986,24 @@ def review_face(review_id):
 
     learned = False
 
-    if review["face_crop_path"] and Path(review["face_crop_path"]).exists():
-        learned = save_accepted_face_embedding(
-            member["name"],
-            review["face_crop_path"],
-            DeepFace
-        )
+    if review["face_crop_path"]:
+        face_crop_path = Path(review["face_crop_path"])
+
+        if not face_crop_path.exists():
+            face_crop_path = get_family_base_dir(family_id) / review["face_crop_path"]
+
+        print("REVIEW LEARN face_crop_path:", face_crop_path)
+        print("REVIEW LEARN exists:", face_crop_path.exists())
+
+        if face_crop_path.exists():
+            original_photo_path = get_family_skipped_dir(family_id) / Path(review["photo_path"]).name
+
+            learned = save_accepted_face_embedding(
+                member["name"],
+                str(face_crop_path),
+                DeepFace,
+                original_photo_path=str(original_photo_path)
+            )
 
     database_write(
         """
@@ -1834,7 +2021,6 @@ def review_face(review_id):
         "member_name": member["name"],
         "learned": learned
     })
-
 
 @app.route("/rescan-skipped")
 def rescan_skipped():
@@ -1929,6 +2115,7 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
         DeepFace,
         family_id
     )
+  
     print("MATCHES:", matches)
     print("POSSIBLE MATCHES:", possible_matches)
     if found:
@@ -1963,7 +2150,14 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
                     status="confirmed",
                     confirmed_by_user=0
                 )
-
+        
+        unknown_count = save_unknown_faces_for_review(
+            family_id=family_id,
+            incoming_path=incoming_path,
+            filename=filename,
+            known_matches=matches,
+            DeepFace=DeepFace
+        )
         try:
             incoming_path.unlink()
         except Exception:
@@ -1977,7 +2171,8 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
             "confirmed_count": len(matched_names),
             "possible_count": 0,
             "skipped_count": 0,
-
+            "unknown_faces": unknown_count,
+            "skipped_count": unknown_count,
             "confirmed_names": matched_names,
             "possible_names": [],
 
@@ -2034,7 +2229,7 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
                 saved_status = saved_detection["status"] if saved_detection else "unknown"
 
                 match["saved_status"] = saved_status
-
+                       
         try:
             incoming_path.unlink()
         except Exception:
@@ -2048,6 +2243,15 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
             m for m in possible_matches
             if m.get("saved_status") == "rejected"
         ]
+
+        unknown_count = save_unknown_faces_for_review(
+            family_id=family_id,
+            incoming_path=incoming_path,
+            filename=filename,
+            known_matches=possible_matches,
+            DeepFace=DeepFace
+        ) 
+
         return {
             "status": "possible" if visible_possible_matches else "already_rejected",
             "filename": filename,
@@ -2057,7 +2261,8 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
             "possible_count": len(visible_possible_matches),
             "rejected_count": len(rejected_matches),
             "skipped_count": 0,
-
+            "unknown_faces": unknown_count,
+            "skipped_count": unknown_count,
             "confirmed_names": [],
             "possible_names": [m.get("name") for m in visible_possible_matches],
             "rejected_names": [m.get("name") for m in rejected_matches],
@@ -2105,8 +2310,8 @@ def scan_one_family_photo(file, family_id, family_embeddings, source="web"):
 
         "confirmed_count": 0,
         "possible_count": 0,
+        "unknown_faces": len(unknown_faces),
         "skipped_count": len(unknown_faces),
-
         "confirmed_names": [],
         "possible_names": []
     }
@@ -2455,11 +2660,15 @@ def telegram_upload_photo():
         caption=caption,
         status=result.get("status")
     )
-
+    review_url = url_for(
+        "review_page",
+        _external=True
+    )
     return jsonify({
         "ok": True,
         "result": result,
-        "album_url": album_url
+        "album_url": album_url,
+        "review_url": review_url
     })
 
 @app.route("/telegram/album/<token>")
@@ -2481,6 +2690,129 @@ def telegram_album_login(token):
     session["login_source"] = "telegram_signed_link"
 
     return redirect(url_for("family_album"))
+
+@app.route("/api/telegram/start-info", methods=["POST"])
+def api_telegram_start_info():
+    data = request.get_json(silent=True) or {}
+
+    chat_id = str(data.get("telegram_chat_id", "")).strip()
+
+    if not chat_id:
+        return jsonify({"linked": False}), 400
+
+    user = get_user_by_telegram_chat_id(chat_id)
+
+    if not user:
+        return jsonify({"linked": False})
+
+    family_id = user["family_id"]
+
+    family = database_read(
+        """
+        SELECT family_name
+        FROM families
+        WHERE id = ?
+        """,
+        (family_id,),
+        one=True,
+    )
+
+    member_count = database_read(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM family_members
+        WHERE family_id = ?
+        """,
+        (family_id,),
+        one=True,
+    )["cnt"]
+
+    return jsonify({
+        "linked": True,
+        "family_name": family["family_name"],
+        "member_count": member_count
+    })
+
+@app.route("/api/telegram/family-members", methods=["GET"])
+def api_telegram_family_members():
+    telegram_chat_id = request.args.get("telegram_chat_id")
+
+    if not telegram_chat_id:
+        return jsonify({
+            "success": False,
+            "message": "Missing telegram_chat_id"
+        }), 400
+
+    members = get_family_members_by_telegram_chat_id(telegram_chat_id)
+
+    if members is None:
+        return jsonify({
+            "success": False,
+            "message": "Telegram account is not linked"
+        }), 404
+
+    return jsonify({
+        "success": True,
+        "members": members
+    })
+
+@app.route("/api/telegram/upload-member-photo", methods=["POST"])
+def telegram_upload_member_photo():
+    telegram_chat_id = request.form.get("telegram_chat_id")
+    member_id = request.form.get("member_id")
+
+    if not telegram_chat_id:
+        return jsonify({"ok": False, "error": "Missing telegram_chat_id"}), 400
+
+    if not member_id:
+        return jsonify({"ok": False, "error": "Missing member_id"}), 400
+
+    if "photo" not in request.files:
+        return jsonify({"ok": False, "error": "Missing photo"}), 400
+
+    user = get_user_by_telegram_chat_id(str(telegram_chat_id))
+
+    if not user:
+        return jsonify({
+            "ok": False,
+            "error": "Telegram account is not linked."
+        }), 403
+
+    family_id = user["family_id"]
+
+    member = get_owned_member_for_family(int(member_id), family_id)
+
+    if not member:
+        return jsonify({
+            "ok": False,
+            "error": "Member does not belong to this family."
+        }), 403
+
+    result = save_telegram_member_profile_photo(
+        family_id=family_id,
+        member_id=int(member_id),
+        photo_file=request.files["photo"]
+    )
+
+    learned = False
+
+    if result.get("ok") and result.get("photo_id") and result.get("file_path"):
+        learned = create_profile_embedding_from_saved_photo(
+            family_id=family_id,
+            member_id=int(member_id),
+            photo_id=result["photo_id"],
+            photo_path=result["file_path"],
+            DeepFace=DeepFace
+        )
+
+    result["learned"] = learned
+
+    if not result.get("ok"):
+        return jsonify(result), 400
+
+    return jsonify(result)
+
+
 
 #-------------------------
 # Run app

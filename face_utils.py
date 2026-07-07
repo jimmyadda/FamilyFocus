@@ -136,8 +136,9 @@ def identify_face(face_path, family_embeddings, DeepFace, threshold=None):
             f"POSSIBLE | {best['name']} | "
             f"distance={best['distance']:.4f}"
         )
+        print("BEST MATCH:", best["name"], best["distance"], "possible")
         return best["name"], best["distance"], "possible"
-
+    
     return None, best["distance"], "rejected"
 
 def create_annotated_family_image(original_path, matches, output_path):

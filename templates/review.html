@@ -354,7 +354,6 @@ document.querySelectorAll(".review-card").forEach(card => {
     });
 });
 
-
  function rejectDetection(detectionId) {
     fetch(`/detections/${detectionId}/reject`, {
         method: "POST"
@@ -470,6 +469,72 @@ document.querySelectorAll(".delete-photo-form").forEach(form => {
     });
 });
 
+document.querySelectorAll(".review-form").forEach(form => {
+    form.addEventListener("submit", async function (e) {
+        e.preventDefault();
+
+        const card = form.closest(".review-card");
+        const formData = new FormData(form);
+
+        try {
+            const response = await fetch(form.action, {
+                method: "POST",
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                showToast(
+                    data.learned
+                        ? `✅ Saved to ${data.member_name} and learned`
+                        : `✅ Saved to ${data.member_name}`
+                );
+
+                if (card) {
+                    card.style.transition = "opacity .25s ease, transform .25s ease";
+                    card.style.opacity = "0";
+                    card.style.transform = "scale(.96)";
+                    setTimeout(() => card.remove(), 250);
+                }
+            } else {
+                alert(data.error || "Could not save review.");
+            }
+
+        } catch (err) {
+            console.error(err);
+            alert("Save failed.");
+        }
+    });
+});
+
 </script>
+
+
+<script>
+function showToast(message) {
+    const toast = document.createElement("div");
+    toast.textContent = message;
+    toast.style.position = "fixed";
+    toast.style.top = "50%";
+    toast.style.left = "50%";
+    toast.style.transform = "translate(-50%, -50%)";
+
+    toast.style.padding = "18px 28px";
+    toast.style.borderRadius = "16px";
+    toast.style.fontSize = "18px";
+    toast.style.fontWeight = "600";
+
+    toast.style.background = "#16a34a";
+    toast.style.color = "#fff";
+
+    toast.style.zIndex = "99999";
+    toast.style.boxShadow = "0 12px 40px rgba(0,0,0,.35)";
+    document.body.appendChild(toast);
+
+    setTimeout(() => toast.remove(), 2500);
+}
+</script>
+
 
 {% endblock %}
