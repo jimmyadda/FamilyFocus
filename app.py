@@ -90,18 +90,20 @@ app.config["JWT_SECRET_KEY"] = os.environ.get(
     "JWT_SECRET_KEY",
     app.config["SECRET_KEY"]
 )
-
-
-
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "heic", "heif"}
 EMBEDDING_ENCRYPTION_KEY = os.getenv(
     "EMBEDDING_ENCRYPTION_KEY"
 )
 app.config["EMBEDDING_ENCRYPTION_KEY"] = EMBEDDING_ENCRYPTION_KEY
 
+#Mobile app Blueprints defined in routes folder
 from routes.api_auth import api_auth_bp
+from routes.api_members import api_members_bp
 
 app.register_blueprint(api_auth_bp)
+app.register_blueprint(api_members_bp)
+
+#-------------------------------------------------
 
 CLIENT_ID = os.getenv("CLIENT_ID", "adda")
  # Mobile app JWT token creation and verification

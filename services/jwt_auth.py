@@ -52,3 +52,10 @@ def api_login_required(f):
         return f(*args, **kwargs)
 
     return wrapper
+
+
+def get_api_family_id():
+    return request.family_id
+
+def get_api_user_id():
+    return request.user_id
