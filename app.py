@@ -28,11 +28,9 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from auth import login_required, get_current_family_id
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+#Api Imports
+from services.embedding_service import create_profile_embedding_from_saved_photo
 
-try:
-    from deepface import DeepFace
-except ImportError:
-    DeepFace = None
 
 from config import (
     DB_PATH,
@@ -82,6 +80,16 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
+
+#DeepFace initialization
+try:
+    from deepface import DeepFace
+except Exception as e:
+    print("DeepFace not available:", e)
+    DeepFace = None
+
+app.config["DeepFace"] = DeepFace
+
 # Folder creation
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 ensure_app_dirs()
@@ -97,9 +105,15 @@ EMBEDDING_ENCRYPTION_KEY = os.getenv(
 app.config["EMBEDDING_ENCRYPTION_KEY"] = EMBEDDING_ENCRYPTION_KEY
 
 #Mobile app Blueprints defined in routes folder
+app.config["create_profile_embedding_from_saved_photo"] = create_profile_embedding_from_saved_photo
+
 from routes.api_auth import api_auth_bp
 from routes.api_members import api_members_bp
+from routes.api_profile_photos import api_profile_photos_bp
+from services.file_utils import allowed_file
 
+
+app.register_blueprint(api_profile_photos_bp)
 app.register_blueprint(api_auth_bp)
 app.register_blueprint(api_members_bp)
 
@@ -112,12 +126,6 @@ CLIENT_ID = os.getenv("CLIENT_ID", "adda")
 # -------------------------
 # General helpers
 # -------------------------
-
-def allowed_file(filename):
-    return (
-        "." in filename
-        and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-    )
 
 def decode_base64_to_temp_file(data_url):
     if "," in data_url:
@@ -532,54 +540,6 @@ def save_accepted_face_embedding(member_name, face_crop_path, DeepFace, original
 #-------------------------
 # recognition helpers
 #-------------------------
-def create_profile_embedding_from_saved_photo(family_id, member_id, photo_id, photo_path, DeepFace):
-    image = cv2.imread(str(photo_path))
-
-    if image is None:
-        print("PROFILE EMBEDDING: Could not read image:", photo_path)
-        return False
-
-    faces = detect_faces_with_opencv(
-        image,
-        min_face_size=MIN_FACE_SIZE_IMAGE
-    )
-
-    if len(faces) == 0:
-        print("PROFILE EMBEDDING: No face found")
-        return False
-
-    # Pick largest face
-    faces = sorted(faces, key=lambda box: box[2] * box[3], reverse=True)
-    best_face = faces[0]
-
-    face_crop = crop_face(image, best_face)
-
-    temp_dir = Path("instance/temp")
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    face_crop_path = temp_dir / f"profile_face_{uuid.uuid4()}.jpg"
-    cv2.imwrite(str(face_crop_path), face_crop)
-
-    embedding = represent_face(face_crop_path, DeepFace)
-
-    if embedding is None:
-        print("PROFILE EMBEDDING: Could not create embedding")
-        return False
-
-    encrypted_embedding = encrypt_embedding(embedding)
-
-    insert_member_embedding(
-        family_id=family_id,
-        member_id=member_id,
-        photo_id=photo_id,
-        encrypted_embedding=encrypted_embedding
-    )
-    print("PROFILE EMBEDDING CREATED:", member_id)
-
-    rebuild_ok = rebuild_member_centroid(member_id)
-    print("PROFILE CENTROID REBUILT:", rebuild_ok)
-    return True
-
 def get_box_value(box, long_key, short_key):
     return box.get(long_key, box.get(short_key))
 

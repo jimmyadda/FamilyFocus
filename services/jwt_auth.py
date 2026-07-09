@@ -22,7 +22,6 @@ def create_jwt_token(user):
         algorithm="HS256"
     )
 
-
 def api_login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -53,9 +52,7 @@ def api_login_required(f):
 
     return wrapper
 
-
 def get_api_family_id():
     return request.family_id
-
 def get_api_user_id():
     return request.user_id

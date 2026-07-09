@@ -21,7 +21,6 @@ def cosine_distance(a, b):
 
     return 1 - np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-
 def detect_faces_with_opencv(image, min_face_size=30):
 
     # If caller sends Path or string, load image first
@@ -48,7 +47,6 @@ def detect_faces_with_opencv(image, min_face_size=30):
 
     return faces
 
-
 def crop_face(image, face_box, padding_ratio=0.45):
     x, y, w, h = face_box
 
@@ -64,7 +62,6 @@ def crop_face(image, face_box, padding_ratio=0.45):
 
     return image[y1:y2, x1:x2]
 
-
 def represent_face(face_path, DeepFace):
     result = DeepFace.represent(
         img_path=str(face_path),
@@ -77,7 +74,6 @@ def represent_face(face_path, DeepFace):
         return None
 
     return result[0]["embedding"]
-
 
 def identify_face(face_path, family_embeddings, DeepFace, threshold=None):
     if not family_embeddings:
@@ -201,7 +197,6 @@ def normalize_embedding(embedding):
     if norm == 0:
         return arr
     return arr / norm
-
 
 def build_member_centroid(member_embeddings):
     """
