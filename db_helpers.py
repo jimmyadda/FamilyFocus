@@ -1118,80 +1118,6 @@ def save_telegram_upload_log(
         status
     ))
 
-def save_telegram_member_profile_photo(family_id, member_id, photo_file):
-    profile_dir = get_family_profiles_dir(family_id)
-
-    member = database_read(
-        """
-        SELECT *
-        FROM family_members
-        WHERE id = ?
-          AND family_id = ?
-        """,
-        (member_id, family_id),
-        one=True
-    )
-
-    if not member:
-        return {
-            "ok": False,
-            "error": "Family member not found."
-        }
-
-    if not photo_file or photo_file.filename == "":
-        return {
-            "ok": False,
-            "error": "No photo received."
-        }
-
-    original = secure_filename(photo_file.filename or "telegram_profile.jpg")
-
-    if "." in original:
-        ext = original.rsplit(".", 1)[1].lower()
-    else:
-        ext = "jpg"
-
-    if ext not in ["jpg", "jpeg", "png", "webp"]:
-        ext = "jpg"
-
-    member_dir = profile_dir / str(member_id)
-    member_dir.mkdir(parents=True, exist_ok=True)
-
-    filename = f"{uuid.uuid4()}.{ext}"
-    save_path = member_dir / filename
-
-    photo_file.save(save_path)
-
-    database_write(
-        """
-        INSERT INTO member_photos (family_id, member_id, file_path)
-        VALUES (?, ?, ?)
-        """,
-        (family_id, member_id, str(save_path).replace("\\", "/"))
-    )
-
-    photo_row = database_read(
-        """
-        SELECT id
-        FROM member_photos
-        WHERE family_id = ?
-          AND member_id = ?
-          AND file_path = ?
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (family_id, member_id, str(save_path).replace("\\", "/")),
-        one=True
-    )
-
-    return {
-        "ok": True,
-        "message": f"Profile photo added for {member['name']}",
-        "member_name": member["name"],
-        "file_path": str(save_path).replace("\\", "/"),
-        "photo_id": photo_row["id"] if photo_row else None
-    }
-
 def get_family_members_by_telegram_chat_id(telegram_chat_id):
     rows = database_read(
         """
@@ -1291,7 +1217,7 @@ def create_member_embedding_from_profile_photo(family_id, member_id, photo_path,
     print(f"Created embedding for member_id={member_id}")
     return True    
 
-def insert_member_embedding(family_id, member_id, photo_id, encrypted_embedding):
+def insert_member_embedding(family_id, member_id, photo_id, encrypted_embedding):    
     database_write(
         """
         INSERT INTO member_embeddings (
@@ -1310,4 +1236,47 @@ def insert_member_embedding(family_id, member_id, photo_id, encrypted_embedding)
             None,
             encrypted_embedding
         )
+    )    
+
+def get_telegram_connection_status(chat_id):
+    return database_read(
+        """
+        SELECT
+            u.id,
+            u.family_id,
+            u.first_name,
+            u.last_name,
+            f.family_name
+        FROM users u
+        JOIN families f
+            ON f.id = u.family_id
+        WHERE u.telegram_chat_id = ?
+          AND u.is_active = 1
+        LIMIT 1
+        """,
+        (str(chat_id),),
+        one=True,
+    )    
+
+def get_telegram_registration_requests():
+    return database_read(
+        """
+        SELECT
+            id,
+            family_name,
+            email,
+            telegram_chat_id,
+            telegram_username,
+            status,
+            created_at
+        FROM telegram_registration_requests
+        ORDER BY
+            CASE status
+                WHEN 'pending' THEN 0
+                WHEN 'approved' THEN 1
+                WHEN 'rejected' THEN 2
+                ELSE 3
+            END,
+            id DESC
+        """
     )    

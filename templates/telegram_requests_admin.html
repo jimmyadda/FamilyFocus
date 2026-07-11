@@ -44,11 +44,11 @@
 
                     {% if req.status == "pending" %}
                         <div class="telegram-actions">
-                            <form method="POST" action="{{ url_for('approve_telegram_request', request_id=req.id) }}">
+                            <form method="POST" action="{{ url_for('admin.approve_telegram_request', request_id=req.id) }}">
                                 <button type="submit" class="btn-gradient">Approve</button>
                             </form>
 
-                            <form method="POST" action="{{ url_for('reject_telegram_request', request_id=req.id) }}">
+                            <form method="POST" action="{{ url_for('admin.reject_telegram_request', request_id=req.id) }}">
                                 <button type="submit" class="btn-danger-soft">Reject</button>
                             </form>
                         </div>

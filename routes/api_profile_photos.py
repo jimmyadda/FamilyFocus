@@ -6,7 +6,7 @@ from services.jwt_auth import (
     api_login_required,
     get_api_family_id
 )
-from services.profile_photo_service import save_profile_photo_for_member
+from services.profile_photo_service import save_member_profile_photo
 
 api_profile_photos_bp = Blueprint(
     "api_profile_photos",
@@ -40,7 +40,7 @@ def api_upload_member_profile_photos(member_id):
         }), 500
 
     for file in files:
-        result = save_profile_photo_for_member(
+        result = save_member_profile_photo(
             family_id=family_id,
             member_id=member_id,
             file=file,

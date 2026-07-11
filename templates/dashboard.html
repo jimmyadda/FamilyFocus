@@ -513,7 +513,7 @@ Family Dashboard
     color: #64748b;
     font-weight: 800;
 }
-<!-- Telegram Connect -->
+/* <!-- Telegram Connect --> */
 
 .dashboard-hero {
     display: flex;
@@ -593,7 +593,7 @@ Family Dashboard
 
                 <div class="dashboard-hero-action">
                     {% if not user or not user["telegram_chat_id"] %}
-                        <a href="{{ url_for('telegram_connect') }}"
+                        <a href="{{ url_for('telegram_web.telegram_connect') }}"
                         class="telegram-connect-btn">
                             📲 Connect Telegram
                         </a>

@@ -9,7 +9,9 @@ from db_helpers import (
 )
 from services.embedding_service import create_profile_embedding_from_saved_photo
 
-def save_profile_photo_for_member(
+
+
+def save_member_profile_photo(
     family_id,
     member_id,
     file,
