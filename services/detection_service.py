@@ -353,12 +353,22 @@ def scan_one_family_photo(
         )
         if found:
             result_path = get_family_results_dir(family_id) / filename
-            # Save the clean original image in the family album
+            save_started = perf_counter()
+
+            # Save the clean original image in the family album#    
+
             shutil.copy2(
                 str(incoming_path),
                 str(result_path)
             )
             #create_annotated_family_image(incoming_path, matches, result_path)
+            print(
+                "TIMING save result image:",
+                round(perf_counter() - save_started, 3),
+                "seconds"
+            )
+
+            db_photo_started = perf_counter()
 
             photo_id = create_family_photo(
                 family_id=family_id,
@@ -366,9 +376,14 @@ def scan_one_family_photo(
                 original_filename=file.filename,
                 source=source,
             )
-
+            print(
+                "TIMING create family photo:",
+                round(perf_counter() - db_photo_started, 3),
+                "seconds"
+            )
             for match in matches:
                 member_id = match.get("member_id")
+                detections_started = perf_counter()
                 if member_id:
                     create_photo_detection(
                         family_id=family_id,
@@ -379,7 +394,12 @@ def scan_one_family_photo(
                         status="confirmed",
                         confirmed_by_user=0,
                     )
+            print(                    "TIMING save detections:",
+                    round(perf_counter() - detections_started, 3),
+                    "seconds"
+                )
 
+            unknown_started = perf_counter()
             unknown_count = save_unknown_faces_for_review(
                 family_id,
                 incoming_path,
@@ -387,7 +407,16 @@ def scan_one_family_photo(
                 matches,
                 DeepFace,
             )
-
+            print(
+                "TIMING unknown-face review:",
+                round(perf_counter() - unknown_started, 3),
+                "seconds"
+            )
+            print(
+                    "TIMING complete scan:",
+                    round(perf_counter() - scan_started, 3),
+                    "seconds"
+                )
             return {
                 "status": "matched",
                 "filename": filename,

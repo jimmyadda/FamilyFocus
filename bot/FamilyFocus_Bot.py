@@ -60,6 +60,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     timeout=20,
                 )
 
+                print("TELEGRAM LINK URL:", response.url)
+                print("TELEGRAM LINK STATUS:", response.status_code)
+                print("TELEGRAM LINK CONTENT-TYPE:", response.headers.get("Content-Type"))
+                print("TELEGRAM LINK BODY:", repr(response.text[:1000]))
                 data = response.json()
 
                 if response.status_code == 200 and data.get("success"):

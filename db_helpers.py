@@ -343,6 +343,10 @@ def init_db():
     add_column_if_missing("learning_reviews", "distance", "REAL")
     add_column_if_missing("learning_reviews", "image_w", "INTEGER")
     add_column_if_missing("learning_reviews", "image_h", "INTEGER")
+    
+    add_column_if_missing("telegram_link_tokens","used_at","TEXT")
+    add_column_if_missing("telegram_link_tokens","expires_at","TEXT")
+    add_column_if_missing("telegram_link_tokens","created_at","TEXT")
 
     add_column_if_missing("family_members", "centroid", "TEXT")
     add_column_if_missing("family_members", "centroid_encrypted", "TEXT")

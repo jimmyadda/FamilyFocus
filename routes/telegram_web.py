@@ -1,6 +1,8 @@
 # routes/telegram_web.py
 
-from flask import Blueprint, abort, redirect, session, url_for
+import os
+
+from flask import Blueprint,flash, abort, redirect, session, url_for
 from auth import login_required
 from db_helpers import get_user_by_telegram_chat_id
 from telegram_utils import create_telegram_link_token
@@ -48,10 +50,11 @@ def telegram_connect():
     )
 
     bot_username = os.getenv("TELEGRAM_BOT_USERNAME")
+    print("TELEGRAM " , bot_username)
 
     if not bot_username:
         flash("Telegram bot is not configured.", "error")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("home"))
 
     return redirect(
         f"https://t.me/{bot_username}?start=link_{token}"
