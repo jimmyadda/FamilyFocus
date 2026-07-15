@@ -904,7 +904,7 @@ def save_learning_review(
         action
     ))
 
-def extract_faces_for_review(image_path, filename, DeepFace):
+def extract_faces_for_review(image_path, filename, DeepFace, family_id):
     import cv2
 
     image = cv2.imread(str(image_path))
@@ -913,7 +913,6 @@ def extract_faces_for_review(image_path, filename, DeepFace):
         return []
 
     image_h, image_w = image.shape[:2]
-    family_id = create_default_family()
     possible_faces = get_family_possible_faces_dir(family_id)
     faces_for_review = []
 

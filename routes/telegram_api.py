@@ -1,20 +1,22 @@
 # routes/telegram_api.py
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, url_for
 from deepface import DeepFace
 
 from db_helpers import (
-    get_user_by_telegram_chat_id,
+    database_read,
+    get_all_family_embeddings_for_family,
+    get_family_members_by_telegram_chat_id,
     get_owned_member_for_family,
     get_telegram_connection_status,
-        database_read,
     get_user_by_telegram_chat_id,
-    link_telegram_account,
-    get_family_members_by_telegram_chat_id
+    save_telegram_upload_log,
 )
 
 from services.profile_photo_service import save_member_profile_photo
-
+from services.detection_service import scan_one_family_photo
+from security_utils import sign_telegram_album_token
+from telegram_utils import link_telegram_account
 
 telegram_api_bp = Blueprint("telegram_api", __name__)
 
@@ -44,7 +46,7 @@ def api_telegram_connection_status():
         "user_name": f'{user["first_name"] or ""} {user["last_name"] or ""}'.strip()
     })
 
-@telegram_api_bp..route("/api/telegram/family-members", methods=["GET"])
+@telegram_api_bp.route("/api/telegram/family-members", methods=["GET"])
 def api_telegram_family_members():
     telegram_chat_id = request.args.get("telegram_chat_id")
 
@@ -121,9 +123,7 @@ def telegram_upload_member_photo():
         "learned": photo["learned"]
     })
 
-    @app.route("/api/telegram/status", methods=["POST"])
-
-
+@telegram_api_bp.route("/api/telegram/status", methods=["POST"])
 def api_telegram_status():
     data = request.get_json(silent=True) or {}
     chat_id = str(data.get("telegram_chat_id", "")).strip()
@@ -222,3 +222,74 @@ def api_telegram_start_info():
         "member_count": member_count
     })
 
+
+
+@telegram_api_bp.route("/api/telegram/upload-photo", methods=["POST"])
+def telegram_upload_photo():
+    telegram_chat_id = request.form.get("telegram_chat_id")
+    telegram_file_id = request.form.get("telegram_file_id")
+    telegram_message_id = request.form.get("telegram_message_id")
+    caption = request.form.get("caption", "")
+
+    if not telegram_chat_id:
+        return jsonify({"ok": False, "error": "Missing telegram_chat_id"}), 400
+
+    if "photo" not in request.files:
+        return jsonify({"ok": False, "error": "Missing photo"}), 400
+
+    user = get_user_by_telegram_chat_id(str(telegram_chat_id))
+    if not user:
+        return jsonify({
+            "ok": False,
+            "error": (
+                "Telegram account is not linked. "
+                "Open the dashboard and connect Telegram first."
+            ),
+        }), 403
+
+    family_id = user["family_id"]
+    if not family_id:
+        return jsonify({
+            "ok": False,
+            "error": "Linked Telegram user has no family_id",
+        }), 403
+
+    family_embeddings = get_all_family_embeddings_for_family(family_id)
+
+    result = scan_one_family_photo(
+        request.files["photo"],
+        family_id,
+        family_embeddings,
+        DeepFace,
+        source="telegram",
+        path_builder=lambda kind, name: url_for(
+            "serve_result_file" if kind == "result" else "serve_possible_file",
+            filename=name,
+        ),
+    )
+
+    token = sign_telegram_album_token(
+        family_id=family_id,
+        telegram_chat_id=telegram_chat_id,
+    )
+    album_url = url_for(
+        "telegram_web.telegram_album_login",
+        token=token,
+        _external=True,
+    )
+
+    save_telegram_upload_log(
+        family_id=family_id,
+        telegram_chat_id=str(telegram_chat_id),
+        telegram_file_id=telegram_file_id,
+        telegram_message_id=telegram_message_id,
+        caption=caption,
+        status=result.get("status"),
+    )
+
+    return jsonify({
+        "ok": True,
+        "result": result,
+        "album_url": album_url,
+        "review_url": url_for("review_page", _external=True),
+    })

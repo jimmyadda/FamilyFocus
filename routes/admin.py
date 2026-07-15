@@ -1,7 +1,7 @@
 # routes/admin.py
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
-from flask_login import login_required
+from auth import login_required
 from werkzeug.security import generate_password_hash
 
 from db_helpers import (
@@ -10,7 +10,7 @@ from db_helpers import (
     ensure_family_dirs,
     get_telegram_registration_requests,
 )
-from your_helpers_file import (
+from telegram_utils import (
     generate_temp_password,
     make_storage_key,
     send_telegram_message,

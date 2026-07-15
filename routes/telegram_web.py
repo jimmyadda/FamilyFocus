@@ -1,9 +1,10 @@
 # routes/telegram_web.py
 
 from flask import Blueprint, abort, redirect, session, url_for
-
+from auth import login_required
 from db_helpers import get_user_by_telegram_chat_id
-from telegram_utils import create_telegram_link_token,verify_telegram_album_token
+from telegram_utils import create_telegram_link_token
+from security_utils import verify_telegram_album_token
 
 
 telegram_web_bp = Blueprint("telegram_web", __name__)

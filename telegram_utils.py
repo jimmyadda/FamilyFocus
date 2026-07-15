@@ -102,8 +102,6 @@ def delete_expired_telegram_link_tokens():
     )
 
 
-#Logging function for Telegram link token usage
-
 def link_telegram_account(token, telegram_chat_id, telegram_username=None):
     now = datetime.utcnow().isoformat()
 
